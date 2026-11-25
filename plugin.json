@@ -1,10 +1,29 @@
 {
   "id": "qishui-app-login",
   "name": "汽水音乐",
-  "version": "1.0.16",
+  "version": "1.1.0",
   "minAppVersion": "0.1.20",
   "main": "index.js",
   "playback": "stream",
+  "settings": [
+    {
+      "key": "externalSourceEnabled",
+      "label": "使用外部音源",
+      "type": "boolean",
+      "help": "开启后先向解析服务获取直链，拿不到合规直链时自动回落官方播放；关闭时不发出任何解析请求。"
+    },
+    {
+      "key": "externalSourceEndpoint",
+      "label": "解析服务地址",
+      "help": "填完整地址，必须以 https:// 开头，例如 https://source.shiqianjiang.cn/api/music/url。留空则只用官方播放。"
+    },
+    {
+      "key": "externalSourceKey",
+      "label": "解析服务密钥",
+      "type": "password",
+      "help": "作为 X-API-Key 发送给解析服务，只保存在本机插件设置里。"
+    }
+  ],
   "navigation": [
     {
       "title": "首页",
@@ -31,7 +50,8 @@
     "network": [
       "qishui.com",
       "*.qishui.com",
-      "beta-luna.douyin.com"
+      "beta-luna.douyin.com",
+      "source.shiqianjiang.cn"
     ],
     "process": [
       "bin/qishui-helper-*"

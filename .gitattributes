@@ -1,2 +1,7 @@
 # Preserve the upstream license verbatim, including its mixed indentation.
 native/signer/include/NODE-LICENSE whitespace=-space-before-tab
+# Signer headers and licenses are verified by SHA-256 at build time. Git's
+# eol conversion (core.autocrlf on Windows) would change those bytes, so they
+# must stay exactly as stored.
+native/signer/include/* -text
+native/signer/licenses/* -text

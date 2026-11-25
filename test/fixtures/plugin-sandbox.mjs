@@ -15,9 +15,12 @@ export const confirmedReply = () => json({ error_code: 0, data: { status: 'confi
 export const profileReply = (id = profile.id) => json({ my_info: { id, nickname: profile.name } })
 
 // Execute the real standalone plugin; only the remote service and music worker are replaced.
-export async function sandbox(queues = [], saved, { replies = [], request, commerce = () => json({}), sign = false, allowSpawn = true, login, loginKill, clock, timer, crypto, platform = 'darwin', arch = 'arm64', dir = '/plugin fixture #1', waitForClose = async () => 0 } = {}) {
+export async function sandbox(queues = [], saved, { replies = [], request, commerce = () => json({}), sign = false, allowSpawn = true, login, loginKill, clock, timer, crypto, platform = 'darwin', arch = 'arm64', dir = '/plugin fixture #1', waitForClose = async () => 0, settings } = {}) {
   const state = new Map(saved ? [['session', saved]] : [])
   const prompts = [], calls = [], authCalls = [], loginCalls = [], pendingTimers = new Set()
+  // The host leaks no credentials through logs, so tests capture them instead of printing them.
+  const logs = []
+  const record = level => (...args) => logs.push({ level, text: args.join(' ') })
   let loginKilled = 0
   let closed = 0, spawned = 0, queued = 0
   const invokeFetch = async (url, options) => {
@@ -39,7 +42,12 @@ export async function sandbox(queues = [], saved, { replies = [], request, comme
     host: {
       platform, arch, dir, t: text => text,
       crypto: { md5: text => createHash('md5').update(text).digest('hex') },
-      setting: () => { throw new Error('login must not require settings') },
+      // Settings are opt-in per test: without them the host behaves as an older
+      // MyGO build, so plugins must tolerate settings they cannot read.
+      setting: key => {
+        if (!settings) throw new Error('login must not require settings')
+        return settings[key]
+      },
       signInPrompt: value => prompts.push(value),
       storage: { get: key => state.get(key), set: (key, value) => state.set(key, value), remove: key => state.delete(key) },
       spawn: (command, args) => {
@@ -70,6 +78,7 @@ export async function sandbox(queues = [], saved, { replies = [], request, comme
       },
     },
     fetch: invokeFetch, URL, URLSearchParams, AbortController, TextDecoder, Uint8Array, crypto,
+    console: { log: record('log'), info: record('info'), warn: record('warn'), error: record('error'), debug: record('debug') },
     setTimeout: (callback, ms) => {
       if (timer) return timer(callback, ms)
       if (ms === 3500) { queueMicrotask(callback); return 0 }
@@ -81,7 +90,7 @@ export async function sandbox(queues = [], saved, { replies = [], request, comme
   const module = new vm.SourceTextModule(source, { context })
   await module.link(() => { throw new Error('plugin must be standalone') })
   await module.evaluate()
-  return { api: module.namespace, state, prompts, calls, authCalls, loginCalls, loginKilled: () => loginKilled, closed: () => closed, spawned: () => spawned, timers: pendingTimers }
+  return { api: module.namespace, state, prompts, calls, authCalls, loginCalls, logs, loginKilled: () => loginKilled, closed: () => closed, spawned: () => spawned, timers: pendingTimers }
 }
 
 export async function until(predicate) {

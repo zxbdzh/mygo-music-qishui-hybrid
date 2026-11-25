@@ -5,6 +5,7 @@ import { accountTier, memberName, COMMERCE_PATH } from '../helper/membership.mjs
 import { signedClient } from '../helper/client-profile.mjs';
 import { scenePage } from '../helper/scene-pages.mjs';
 import { discoverySection, isRadioStationID, MAX_RADIO_STATION_ID_LENGTH } from '../helper/exploration.mjs';
+import { resolveExternal } from '../helper/external-source.mjs';
 const SESSION_KEY = "session";
 const t = host.t || ((text) => text);
 let generation = 0;
@@ -894,7 +895,37 @@ export async function search({ query, kind = "tracks", offset = 0 }) {
   }
   return reply.result;
 }
+// 宿主设置页写入的三个键缺一即视为未配置；旧宿主没有 settings API 或
+// 读取失败时同样回落官方路径，播放不能被配置读取卡住。
+function externalSourceSettings() {
+  const read = key => {
+    try { return String(host.setting(key) ?? ''); } catch { return ''; }
+  };
+  if (read('externalSourceEnabled') !== 'true') return null;
+  const endpoint = read('externalSourceEndpoint');
+  const key = read('externalSourceKey');
+  // 解析服务只能走 HTTPS：官方路径才是唯一可信的回落目标。
+  if (!key || !/^https:\/\/\S+$/.test(endpoint)) return null;
+  return { endpoint, key };
+}
+
+// 任一环节失败都静默回落：不修改 session、不写 storage、不触碰登录态。
+async function externalStream({ id, quality }) {
+  const settings = externalSourceSettings();
+  // 只有汽水 track_id 与解析服务有映射关系；其它来源的 ID 不值得发出去。
+  if (!settings || !/^\d{1,32}$/.test(typeof id === 'string' ? id : '')) return null;
+  try {
+    return await resolveExternal({ ...settings, id, quality });
+  } catch (error) {
+    // 宿主只给了 console；只记录归一化原因，绝不带出 key 或带签名的直链。
+    try { console.warn(`external source fallback: ${error?.name === 'AbortError' ? 'timeout' : 'failure'}`); } catch { /* 日志不是播放前提。 */ }
+    return null;
+  }
+}
+
 export async function stream({ id, quality = "high" }) {
+  const external = await externalStream({ id, quality });
+  if (external) return external;
   // Keep the helper alive while MyGO downloads its private loopback URL.
   return (await music("stream", { id, quality }, true)).result;
 }

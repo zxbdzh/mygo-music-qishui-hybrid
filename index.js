@@ -1725,6 +1725,81 @@ function scenePage(modes, page = "listening-modes", discoveries = []) {
   ] };
 }
 
+// helper/external-source.mjs
+var TIMEOUT = 8e3;
+var USER_AGENT = "lx-music-desktop/2.99.0";
+var QUALITY = { standard: "128k", high: "320k", lossless: "flac" };
+function mapQuality(quality) {
+  return QUALITY[quality] || QUALITY.high;
+}
+function resolveUrl(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("external source: malformed body");
+  if (payload.code !== 200) throw new Error("external source: business failure");
+  if (typeof payload.url !== "string" || !payload.url) throw new Error("external source: missing url");
+  return payload.url;
+}
+var ACTUAL = {
+  flac: { type: "flac", quality: "lossless" },
+  "320k": { type: "m4a", quality: "high" },
+  "128k": { type: "m4a", quality: "standard" }
+};
+var REQUESTED = {
+  lossless: ACTUAL.flac,
+  high: ACTUAL["320k"],
+  standard: ACTUAL["128k"]
+};
+var CONTAINER = /\.(flac|m4a|mp4|aac|mp3)$/i;
+function actualQuality(url, payload, requested) {
+  const stated = typeof payload?.quality === "string" ? payload.quality.toLowerCase() : "";
+  if (ACTUAL[stated]) return ACTUAL[stated];
+  let container = "";
+  try {
+    container = new URL(url).pathname.match(CONTAINER)?.[1]?.toLowerCase() || "";
+  } catch {
+  }
+  if (container === "flac") return ACTUAL.flac;
+  if (container) return requested === "lossless" ? ACTUAL["128k"] : REQUESTED[requested] || ACTUAL["320k"];
+  return REQUESTED[requested] || ACTUAL["320k"];
+}
+var PRIVATE_IPV4 = /^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
+var PRIVATE_IPV6 = /^(?:\[::1?\]$|\[::ffff:|\[f[cd][0-9a-f]{0,2}:)/i;
+function assertSafeURL(value) {
+  if (typeof value !== "string" || !value || value.length > 16384) throw new Error("external source: unsafe url");
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("external source: unsafe url");
+  }
+  if (url.protocol !== "https:") throw new Error("external source: unsafe url");
+  if (url.username || url.password) throw new Error("external source: unsafe url");
+  const host2 = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (!host2 || host2 === "localhost" || host2.endsWith(".localhost")) throw new Error("external source: unsafe url");
+  if (PRIVATE_IPV4.test(host2) || PRIVATE_IPV6.test(host2)) throw new Error("external source: unsafe url");
+  return value;
+}
+async function resolveExternal({ endpoint, key, id, quality, request = fetch, timeout = TIMEOUT }) {
+  const target = new URL(endpoint);
+  target.searchParams.set("source", "qs");
+  target.searchParams.set("songId", id);
+  target.searchParams.set("quality", mapQuality(quality));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const reply = await request(target.href, {
+      method: "GET",
+      headers: { "X-API-Key": key, "User-Agent": USER_AGENT, "Content-Type": "application/json" },
+      signal: controller.signal
+    });
+    if (!reply || reply.status !== 200) throw new Error("external source: http status");
+    const payload = await reply.json();
+    const url = assertSafeURL(resolveUrl(payload));
+    return { url, ...actualQuality(url, payload, quality) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // src/plugin.mjs
 var SESSION_KEY = "session";
 var t = host.t || ((text) => text);
@@ -2782,7 +2857,36 @@ async function search({ query, kind = "tracks", offset = 0 }) {
   }
   return reply.result;
 }
+function externalSourceSettings() {
+  const read = (key2) => {
+    try {
+      return String(host.setting(key2) ?? "");
+    } catch {
+      return "";
+    }
+  };
+  if (read("externalSourceEnabled") !== "true") return null;
+  const endpoint = read("externalSourceEndpoint");
+  const key = read("externalSourceKey");
+  if (!key || !/^https:\/\/\S+$/.test(endpoint)) return null;
+  return { endpoint, key };
+}
+async function externalStream({ id, quality }) {
+  const settings = externalSourceSettings();
+  if (!settings || !/^\d{1,32}$/.test(typeof id === "string" ? id : "")) return null;
+  try {
+    return await resolveExternal({ ...settings, id, quality });
+  } catch (error2) {
+    try {
+      console.warn(`external source fallback: ${error2?.name === "AbortError" ? "timeout" : "failure"}`);
+    } catch {
+    }
+    return null;
+  }
+}
 async function stream({ id, quality = "high" }) {
+  const external = await externalStream({ id, quality });
+  if (external) return external;
   return (await music("stream", { id, quality }, true)).result;
 }
 export {

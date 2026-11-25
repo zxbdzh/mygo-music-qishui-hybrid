@@ -8,7 +8,7 @@ export const runtimeSource = [
   'plugin.json', 'index.js', 'package.json', 'package-lock.json', 'README.md', 'NOTICE.md', 'PLAYBACK-HISTORY.md', 'LICENSE', 'src',
   'helper/catalog-core.mjs', 'helper/protocol.mjs', 'helper/client-profile.mjs', 'helper/json-body.mjs',
   'helper/avatar.mjs', 'helper/comments.mjs', 'helper/membership.mjs', 'helper/library-actions.mjs', 'helper/lyrics.mjs', 'helper/collections.mjs',
-  'helper/discovery.mjs', 'helper/history.mjs', 'helper/scene-pages.mjs', 'helper/home-page.mjs', 'helper/exploration.mjs',
+  'helper/discovery.mjs', 'helper/history.mjs', 'helper/scene-pages.mjs', 'helper/home-page.mjs', 'helper/exploration.mjs', 'helper/external-source.mjs',
   'helper/m4a.mjs',
   'scripts/build.mjs', 'scripts/package.mjs', 'scripts/package-layout.mjs', 'scripts/build-native.mjs',
   'scripts/runtime-assets.mjs', 'scripts/prepare-windows.mjs',
@@ -16,7 +16,7 @@ export const runtimeSource = [
   'native/windows-runner/main_windows.go', 'native/windows-runner/go.mod', 'native/windows-runner/go.sum', 'native/windows-runner/README',
 ]
 export const validationSource = [
-  'VALIDATION.md', 'RELEASE.md', 'CLAUDE.md', 'test', 'scripts/release.mjs', 'scripts/preflight.mjs', 'scripts/host-ui-fixture.mjs', 'scripts/prepare-node.mjs',
+  'VALIDATION.md', 'RELEASE.md', 'test', 'scripts/release.mjs', 'scripts/preflight.mjs', 'scripts/host-ui-fixture.mjs', 'scripts/prepare-node.mjs',
   'scripts/verify-windows.mjs', 'scripts/verify-windows.cmd', 'scripts/build-audio-fixtures.mjs', 'scripts/build-m4a-fixture.mjs',
   'scripts/build-ffmpeg.mjs', 'scripts/ffmpeg-config.mjs',
   'helper/ffmpeg-args.mjs', 'helper/m4a-gapless.mjs',
@@ -40,6 +40,15 @@ export async function copyPackageSource(root, destination, { validation = false 
   for (const name of validation ? validationSource : runtimeSource) {
     const target = path.join(destination, name)
     await mkdir(path.dirname(target), { recursive: true })
-    await cp(path.join(root, name), target, { recursive: true, filter: source => validation || (!/_test\.go$/.test(source) && !/\.test\.(?:cpp|mjs)$/.test(source) && !/(?:^|\/)(?:tests?|testdata)(?:\/|$)/.test(source) && !source.endsWith('/native/signer/validate.mjs')) })
+    // Windows 的 cp filter 收到反斜杠路径；统一成 / 再按相对的运行时规则排除，
+    // 否则 testdata、tests 和 signer 验证脚本会漏进运行时包。
+    const base = path.join(root, name)
+    const excluded = source => {
+      const relative = path.relative(root, source).split(path.sep).join('/')
+      return /_test\.go$/.test(relative) || /\.test\.(?:cpp|mjs)$/.test(relative) ||
+        /(?:^|\/)(?:tests?|testdata)(?:\/|$)/.test(relative) ||
+        /(?:^|\/)native\/signer\/validate\.mjs$/.test(relative)
+    }
+    await cp(base, target, { recursive: true, filter: source => validation || !excluded(source) })
   }
 }

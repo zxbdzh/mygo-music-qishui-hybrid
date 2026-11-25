@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 状态 | **待批准**（draft，v1） |
+| 状态 | **已批准 · 已实现（沙箱测试通过，实机未验收）**（v1） |
 | 方案版本 | v1 |
 | 负责人 | zxbdzh |
 | 批准边界 | 仅第 1 节范围；发版、推送到 GitHub、改动宿主均不在本卡内 |
@@ -311,6 +311,56 @@ test('请求 lossless 但只回 128k 时如实标 standard', async () => {
 
 | 版本 | 范围 | 负责人 | 时间 | 结论 |
 | --- | --- | --- | --- | --- |
-| v1 | 第 1 节交付范围 | zxbdzh | 待填 | **待批准** |
+| v1 | 第 1 节交付范围 | zxbdzh | 2026-11-25 | **已批准**（对话中“我允许开工了”） |
 
 > 负责人对明确版本和范围的回复才构成批准；旧 Note、标签、任务分配或 Agent 自审不能替代。
+
+## 11. 实现记录（2026-11-25）
+
+### 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `plugin.json` | settings 三项、`permissions.network` 加 `source.shiqianjiang.cn`、版本 `1.1.0` |
+| `package.json`、`package-lock.json` | 版本同步 `1.1.0`（`RELEASE.md` 要求三份版本一致） |
+| `src/plugin.mjs` | `stream()` 前置分支、`externalSourceSettings()`、`externalStream()` |
+| `helper/external-source.mjs` | 新增：`mapQuality`、`resolveUrl`、`assertSafeURL`、`resolveExternal` |
+| `scripts/package-layout.mjs` | `runtimeSource` 增加 `helper/external-source.mjs`（否则运行包缺模块） |
+| `test/external-source.test.mjs` | 新增，12 条 |
+| `test/fixtures/plugin-sandbox.mjs` | `settings` 注入（未注入时保持原抛错）、`console` 收集到 `logs` |
+| `test/build/package-layout.test.mjs` | 运行时包清单断言补 `helper/external-source.mjs` |
+| `index.js` | `npm run build` 产物 |
+
+### 实现选择（计划未明确处）
+
+- **实际档位判定**（真实服务实测后确定，见下）：优先响应体 `quality` 字段；否则看链接扩展名（`.flac` 为无损，明确的有损扩展名按容器降档）；扩展名缺失时按本次请求档位回填，因为真实 CDN 直链不带后缀，响应也不含档位。
+- **日志**：宿主无专用日志 API，使用 `console.warn`，只输出 `timeout` / `failure` 归一化原因，不含 key 与直链。
+- **地址校验**：在计划 4 条之外补 `0.0.0.0`、`::`、`localhost.` 尾点与 `::ffff:` 映射，避免绕过。
+- **track_id 校验**：非 `/^\d{1,32}$/` 的 ID 不发给解析服务，直接走官方路径。
+
+### 真实服务实测（2026-11-25）
+
+- 提供的音源地址是 LX 脚本端点 `https://source.shiqianjiang.cn/api/script/lx`。按计划「不执行第三方 LX 脚本」，只读取脚本里声明的 HTTP 解析接口，未加载或运行脚本。
+- 实际解析接口：`GET https://source.shiqianjiang.cn/api/music/url?source=qs&songId=<id>&quality=<128k|320k|flac>`，头 `X-API-Key`、`User-Agent`。
+- 样本 `7245043407416150018` 三档均 `code=200`；响应字段 `code/message/name/server/serverName/type/url`，**无 `quality` 档位字段**，`type` 恒为 21。
+- 直链主机 `sf6-cdn-tos.douyinstatic.com`，路径无扩展名。Range 取 16 字节验证容器：`flac` 档为 `fLaC`，`320k` / `128k` 档为 `ftypM4A`。
+- 因此原「按扩展名判断、其余一律 standard」会把无损档错标成 `m4a`，已改为上面的三级判定，并补测试「CDN 直链没有扩展名时按请求档位回填」。
+- 插件全链路实跑（沙箱加载真实 `index.js`，仅替换 `fetch` 为真实网络）：`lossless→flac/lossless`、`high→m4a/high`、`standard→m4a/standard`，均未启动 Go worker，`size` 不传，耗时 0.2–0.4 秒。
+- ffprobe 直接读三档直链（不落盘）：`flac` 为 FLAC 24bit/44.1kHz、342.4 秒、1.58 Mbps；`320k` 为 AAC 257 kbps；`128k` 为 AAC 129 kbps。三档均可解码、时长一致，回填的 `type` 与实际容器相符。
+- 无效密钥实跑：解析失败后回落官方路径，日志仅一条 `external source fallback: failure`，不含密钥。
+
+### 测试
+
+- `npm run check`：通过。
+- `node --experimental-vm-modules --test test/external-source.test.mjs test/playback.test.mjs test/plugin.test.mjs`：57 条，0 失败，2 跳过。
+- 全量 `test/*.test.mjs test/build/*.test.mjs`：355 条，1 条失败（`package-layout` 的 `native/signer/validate.mjs` 排除在 Windows 路径分隔符下不生效，已在 `ef6f547` 基线 worktree 复现，与本卡无关）。
+- 变异检查：去掉业务码校验、开关校验、日志脱敏，对应测试分别失败。
+
+### 未验证
+
+- 实机播放（Windows/macOS 宿主）未验证：只在沙箱里拿到直链，宿主播放器拉流、seek、下载未验证。
+- 服务降档但没有 `code=500` 的情况无法识别：扩展名缺失时按请求档位回填，此时可能把降档标高。
+- 宿主设置页控件展示未在 MyGO 实机确认。
+- `code=0` 成功体未兼容（LX 脚本兼容 0 与 200，实测只见到 200）。
+- README / README.en.md 未更新（不在本卡范围，发布准备时处理）。
+
