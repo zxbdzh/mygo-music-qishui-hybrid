@@ -1,0 +1,33 @@
+{
+  "description": "项目 Agent 开发流程提醒",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const cp=require('node:child_process');const root=cp.execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim();require(require('node:path').join(root,'.codex/hooks/workflow_reminder.cjs')).run()\"",
+            "commandWindows": "node -e \"const cp=require('node:child_process');const root=cp.execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim();require(require('node:path').join(root,'.codex/hooks/workflow_reminder.cjs')).run()\"",
+            "statusMessage": "加载项目开发流程提醒",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(apply_patch|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const cp=require('node:child_process');const root=cp.execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim();require(require('node:path').join(root,'.codex/hooks/workflow_reminder.cjs')).run()\"",
+            "commandWindows": "node -e \"const cp=require('node:child_process');const root=cp.execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim();require(require('node:path').join(root,'.codex/hooks/workflow_reminder.cjs')).run()\"",
+            "statusMessage": "检查项目写入流程",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
