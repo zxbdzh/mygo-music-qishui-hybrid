@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 状态 | **待批准**（draft，v1） |
+| 状态 | **已实施**（2026-11-26） |
 | 方案版本 | v1 |
 | 负责人 | zxbdzh |
 | 批准边界 | 仅第 1 节范围；两处 fork、各自 Release 需另行授权 |
@@ -275,6 +275,44 @@ test('接口 500 时回落且不改登录态', async () => {
 
 | 版本 | 范围 | 负责人 | 时间 | 结论 |
 | --- | --- | --- | --- | --- |
-| v1 | 第 1 节交付范围（两个 fork 各加一层音源分支） | zxbdzh | 待填 | **待批准** |
+| v1 | 第 1 节交付范围（两个 fork 各加一层音源分支） | zxbdzh | 2026-11-26 | **已批准并实施** |
 
 > 会员曲目策略「能放」已由负责人在对话中确认；fork 与发布仍需单独授权。
+
+---
+
+## 11. 实施记录（2026-11-26）
+
+状态改为 **已实施**，两个仓库各自发布：
+
+| 仓库 | 版本 | Release | 安装包 |
+| --- | --- | --- | --- |
+| `zxbdzh/mygo-music-netease` | 0.2.0 | `v0.2.0` | `netease-0.2.0.zip`（35 KB） |
+| `zxbdzh/mygo-music-qq-plugin` | 0.4.0 | `v0.4.0` | `qqmusic-0.4.0.zip`（139 KB） |
+
+### 落地方式
+
+- 网易云：仓库没有构建链，`external-source` 逻辑**内联进 `index.js`**，`pack.py` 不变。
+- QQ：`build.mjs` 用 esbuild 打包，新增独立 `external-source.js` 由入口 import，最终仍打成单文件 `dist/index.js`。
+
+### 与卡片预想的差异
+
+1. **`wy` 直链是 `http://`**。卡片只按 https 设计，实测 `m701/m801.music.126.net` 返回 http。实现改为同主机升级到 https 后再校验（实测 https 返回 206），保持只接受 https 的约定。
+2. **QQ 增加非 songmid 短路**：`id` 不是 10–20 位字母数字时直接跳过外部音源，避免把节目等合成 id 送进音源接口。
+3. **QQ 的 `headers`** 沿用原实现（`Referer: https://y.qq.com/`），因为音源直链同样走 QQ CDN。
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| 网易云 `node --test index.test.mjs` | 54 项通过（原 46 + 新 8） |
+| QQ `npm test` | 76 项，73 通过、3 跳过、0 失败（新 5 条） |
+| 网易云真实链路 `wy/347230` | lossless→flac（m701）、high→mp3、standard→mp3，无回落日志，脚本缓存 1 条 |
+| QQ 真实链路 `tx/0039MnYb0qxYhV` | lossless→flac、high→mp3、standard→mp3 |
+| 坏 songmid `tx/000MkMni19ClKG` | HTTP 500 → 回落，日志 `failure` |
+
+### 仍未验证
+
+- 未在 MyGO 里实际安装这两个 ZIP 播放。
+- 未用非会员账号做对照，**依然不能证明**绕过会员限制。
+- 未验证 `-460` 风控、地区限制、歌词与封面在音源介入后的表现。
