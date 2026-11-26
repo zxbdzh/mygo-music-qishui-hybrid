@@ -727,7 +727,7 @@ async function music(method, params = {}, persistent = false) {
         if (params.state == null) throw authError('response');
         const page = await catalog.discoveryPage(params.state);
         current();
-        return { result: { title: '探索更多新模式', sections: [discoverySection(page.items)] }, discovery: page.state, more: page.more };
+        return { result: { title: '探索更多新模式', sections: [{ ...discoverySection(page.items), pager: true }] }, discovery: page.state, more: page.more };
       }
       case 'radio': { const reply = await catalog.radioBatch(params); current(); return reply; }
       case 'feed': result = await catalog.recommendationBatch(params); break;
@@ -841,16 +841,19 @@ export async function stations() {
 }
 export async function stationNext({ id }) { return nextFeed(id); }
 
-function discoveryResult(reply) {
+function discoveryResult(reply, { reset = false } = {}) {
   const result = reply.result;
-  if (reply.more && reply.discovery) {
+  // MyGO turns the pager's pages sideways and asks for the next batch as its
+  // last page shows, so the batch it holds is the page it is given.
+  const section = result.sections.find(entry => entry.pager);
+  if (section && reply.more && reply.discovery) {
     while (discoveryPages.size >= 100) discoveryPages.delete(discoveryPages.keys().next().value);
     const page = `listening-modes:more:${++browseSequence}`;
     discoveryPages.set(page, { state: reply.discovery, result: null, pending: null });
-    // MyGO renders Links after the content and owns their card appearance.
-    // A separate trailing section keeps this manual pagination out of the header.
-    result.sections.push({ links: [{ title: t("换一批"), subtitle: t("查看另一批探索内容"), page }] });
+    section.nextPage = page;
   }
+  // A batch the app no longer holds starts the pages over from the first one.
+  if (section && reset) section.resetPager = true;
   return result;
 }
 export async function browse({ page }) {
@@ -863,7 +866,9 @@ export async function browse({ page }) {
   }
   if (typeof page === "string" && /^listening-modes:more:[1-9]\d{0,14}$/.test(page)) {
     const saved = discoveryPages.get(page);
-    if (!saved) throw fail("unsupported", t("此探索页面已过期，请重新打开听歌模式。"));
+    // The app dropped this batch, or the account changed under it: the pages
+    // start over from the first batch instead of failing to turn.
+    if (!saved) return discoveryResult(await music("modePage", { page: "listening-modes" }), { reset: true });
     if (saved.result) return saved.result;
     if (!saved.pending) {
       const attempt = generation;

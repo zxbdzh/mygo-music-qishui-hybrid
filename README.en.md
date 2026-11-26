@@ -17,7 +17,7 @@ If you find this plugin useful, consider giving [the project](https://github.com
 | Account | QR sign-in, session restoration, sign-out, account details, VIP / SVIP status, and your profile page |
 | Search | Search songs, artists, albums, and playlists, with search suggestions |
 | Playlists | Browse playlist details and songs, with the playlist creator shown |
-| Music discovery | Home discovery, personalized recommendations, familiar / fresh recommendations, listening modes, and continuous radio playback |
+| Music discovery | Home discovery, personalized recommendations, familiar / fresh recommendations, listening modes, and continuous radio playback; discovery cards turn a page at a time, asking for the next batch at the last one |
 | Playback and downloads | Standard / High / Lossless quality selection, seeking, song downloads through MyGo Music, and direct M4A / FLAC playback |
 | External source | Optional: fill in an LX script URL to resolve direct audio links first, silently falling back to official playback |
 | Lyrics | Line-synced lyrics, official word-synced lyrics, and Chinese translations; falls back to line-synced lyrics when word timing is unavailable |
@@ -31,7 +31,7 @@ Follows, likes, saves, and playlist edits use your signed-in Soda Music account.
 
 ## Installation
 
-Requires **MyGo Music 0.1.20 or later**.
+Requires **MyGo Music 0.1.26.1 or later**.
 
 ### Install from the repository
 

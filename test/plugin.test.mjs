@@ -360,11 +360,11 @@ test('coalesces exploration continuation and retries without skipping an exposur
   })
   const s = await sandbox([], session, { sign: true, request: service.request })
   const landing = await s.api.browse({ page: 'listening-modes' })
-  const route = landing.sections.at(-1).links[0].page
+  const route = landing.sections.find(section => section.pager).nextPage
   assert.match(route, /^listening-modes:more:\d+$/)
   assert.equal(landing.sections[1].stations[0].id, 'radio:42')
   assert.equal(landing.sections[1].morePage, undefined)
-  assert.equal(landing.sections.length, 3)
+  assert.equal(landing.sections.length, 2)
   const a = s.api.browse({ page: route }), b = s.api.browse({ page: route })
   await until(() => service.for('mix').length === 1)
   assert.deepEqual(service.for('mix')[0].body, { block_type: 'discover_playlist_mix', sub_channel_id: -2, exposure_radio_list: ['42'], cursor: 'root-cursor', session_id: 'synthetic-discovery' })
@@ -375,13 +375,13 @@ test('coalesces exploration continuation and retries without skipping an exposur
   assert.equal(service.for('mix').length, 1)
   assert.equal(first.sections[0].stations[0].id, 'radio:43')
   assert.equal(first.sections[0].morePage, undefined)
-  assert.equal(first.sections.length, 2)
-  const more = first.sections.at(-1).links[0].page
+  assert.equal(first.sections.length, 1)
+  const more = first.sections[0].nextPage
   assert.notEqual(more, route)
   await assert.rejects(s.api.browse({ page: more }))
   const final = await s.api.browse({ page: more })
   assert.equal(final.sections[0].stations[0].id, 'radio:44')
-  assert.equal(final.sections[0].morePage, undefined)
+  assert.equal(final.sections[0].nextPage, undefined)
   assert.equal(final.sections.length, 1)
   assert.ok(final.sections.every(section => !section.links))
   assert.deepEqual(service.for('mix')[1].body, service.for('mix')[2].body)
@@ -389,7 +389,7 @@ test('coalesces exploration continuation and retries without skipping an exposur
   assert.equal(service.for('mix')[2].body.cursor, 'next-cursor')
   for (const call of s.calls.filter(call => new URL(call.params.url).pathname === paths.mix)) assertSigner(call, 'mix', session)
   await s.api.signOut()
-  await assert.rejects(s.api.browse({ page: route }), error => error.code === 'unsupported')
+  await assert.rejects(s.api.browse({ page: route }), error => error.code === 'signIn')
 })
 
 test('sign-out discards pending exploration pages and continuation tokens', async () => {
@@ -398,13 +398,13 @@ test('sign-out discards pending exploration pages and continuation tokens', asyn
   const service = catalogService({ modes: [modes()], discover: [discovery(['42'])], mix: [() => pending] })
   const s = await sandbox([], session, { sign: true, request: service.request })
   const first = await s.api.browse({ page: 'listening-modes' })
-  const route = first.sections.at(-1).links[0].page
+  const route = first.sections.find(section => section.pager).nextPage
   const loading = s.api.browse({ page: route }), rejected = assert.rejects(loading, stale)
   await until(() => service.for('mix').length === 1)
   await s.api.signOut()
   finish(discovery(['43'], { initial: false }))
   await rejected
-  await assert.rejects(s.api.browse({ page: route }), error => error.code === 'unsupported')
+  await assert.rejects(s.api.browse({ page: route }), error => error.code === 'signIn')
 })
 
 // The official radio queue reads flow_type and trigger_info from style.link.

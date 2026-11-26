@@ -1,5 +1,14 @@
 # 验证记录
 
+## 探索卡片整屏翻页（1.3.0，2026-11-26）
+
+- 「探索更多新模式」和「首页探索」由纵向堆叠改为整屏翻页：宿主按窗口列数排一页卡片，左右箭头、触控板横滑或 `←/→` 翻页，末页显示时向插件取下一批；首页只翻已有 15 张，末尾「更多」卡进听歌模式。契约见 `docs/adr/0002-pager-owned-by-host.md`。
+- 宿主 `internal/music` 新增 `pager` / `nextPage` / `resetPager` / `oneRow` 四个可选字段，旧宿主忽略即退回原来的网格行；`internal/app/ui_browse_pager.go` 持有翻页位置、按需取批、失败重试与批次重置。插件侧 `helper/scene-pages.mjs`、`helper/home-page.mjs`、`src/plugin.mjs` 改为声明 pager 与 `nextPage`，删除「换一批」链接卡，`minAppVersion` 抬到 `0.1.26.1`（宿主 `buildinfo` 的 fork 兼容基线）。
+- 验证：宿主 `go test ./internal/app ./internal/music ./internal/plugin` 通过；翻页 UI 测试（箭头、键盘、触控板横滑、取批、失败重试、单行截断、只取 pager 段、批次重置）`-count=5` 通过。插件 `npm run check` 通过，`test/*.test.mjs` 337 项（325 通过、11 跳过、1 项预存在失败），`test/build/*.test.mjs` 26 项通过。经宿主 overlay 运行插件 UI 测试，翻页取批与返回缓存通过。
+- 自测包：`dist/plugin-windows-amd64-1.3.0-1795685671079.zip`、`dist/plugin-windows-arm64-1.3.0-1795685696349.zip`，同目录另有验证包。
+- 未完成：真实账号下的桌面点击与试听未验收（未启动窗口）；Windows ARM64 实机未验收；`test/worker.test.mjs` 的临时 helper 卸载 `EBUSY` 为预存在环境问题，在干净 HEAD 上同样复现。
+- 预存在失败：经宿主 overlay 的 `TestQishuiMissingCoverModeAction`、`TestQishui105RecommendationControls` 在宿主 HEAD 与插件 HEAD 组合同样失败（点击后未开始播放），与本次翻页改动无关，未在本次修改范围内处理。未提交、未推送、未发布。
+
 ## 探索电台主题选择修复（1.0.16，2026-11-18）
 
 - 首页和听歌模式共用的探索卡片丢失了 `style.link` 中的 `flow_type`、`trigger_info`。依据固定哈希校验通过的官方 PC 3.7.0 分发包 `main.js.map` 中 `services/queue/items/radio.ts`，播放请求改为携带这两个选择字段及原始 `radio_id`、游标，不再发送该接口未声明的 `count`。

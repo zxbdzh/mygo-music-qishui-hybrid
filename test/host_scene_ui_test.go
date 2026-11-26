@@ -88,6 +88,17 @@ func TestQishui105NativeFrames(t *testing.T) {
 				a.browses = map[string]*browseData{view.id: {page: fixture.Pages[view.id]}}
 				a.route = route{page: pageBrowse, src: "fake", id: view.id}
 			}
+			var ch chan func()
+			var asked chan string
+			if view.id == "listening-modes" {
+				// The row asks for the batch after it as its last page shows,
+				// which the view is first built with.
+				ch, asked = posts(a), make(chan string, 4)
+				fake(a).browse = func(id string) (*music.Browse, error) {
+					asked <- id
+					return fixture.Pages[id], nil
+				}
+			}
 			tt := ui.NewTester(a.view, 1200, 900)
 			tt.SetDark(dark)
 			settled(tt)
@@ -97,6 +108,15 @@ func TestQishui105NativeFrames(t *testing.T) {
 			}
 			saveFrame(t, dir, view.file+"-"+theme+".png", tt.Image())
 			if view.id == "listening-modes" {
+				// The frame after the turn shows the pages go on with it.
+				wait(t, asked, "the batch after the last page")
+				runPost(t, ch)
+				settled(tt)
+				if err := tt.Click("Next page"); err != nil {
+					t.Fatal(err)
+				}
+				settled(tt)
+				saveFrame(t, dir, view.file+"-turned-"+theme+".png", tt.Image())
 				tt.Scroll(800, 400, 0, 100000)
 				settled(tt)
 				saveFrame(t, dir, view.file+"-bottom-"+theme+".png", tt.Image())
@@ -140,67 +160,61 @@ func TestQishuiMissingCoverModeAction(t *testing.T) {
 	}
 }
 
-// Clicking the bottom exploration link loads the next batch, retains back/forward caching and preserves the discovered radio ID.
+// The exploration row turns its pages in place, and the page it was turned to
+// is still there after going to another page and back.
 func TestQishui105DiscoveryNavigation(t *testing.T) {
 	fixture := loadQishuiSceneFixtures(t)
 	a := qishuiSceneApp(t, fixture)
 	ch := posts(a)
-	root := *fixture.Pages["listening-modes"]
-	root.Sections = root.Sections[1:]
-	a.browses = map[string]*browseData{}
-	a.route = route{page: pageBrowse, src: "fake", id: "listening-modes"}
+	page := *fixture.Pages["listening-modes"]
+	next := page.Sections[len(page.Sections)-1].NextPage
+	if next == "" {
+		t.Fatal("the exploration section names no page after it")
+	}
 	asked := make(chan string, 8)
-	fake(a).browse = func(page string) (*music.Browse, error) {
-		asked <- page
-		if page == "listening-modes" {
-			return &root, nil
-		}
-		return fixture.Pages[page], nil
+	fake(a).browse = func(id string) (*music.Browse, error) {
+		asked <- id
+		return fixture.Pages[id], nil
 	}
-	// Loading through the host also initializes freshness metadata in MyGO 0.1.20.
-	a.loadBrowse(a.library, "listening-modes", false)
-	if page := wait(t, asked, "initial discovery page"); page != "listening-modes" {
-		t.Fatal("initial discovery opened a different page")
-	}
-	runPost(t, ch)
+	a.browses = map[string]*browseData{"listening-modes": {page: &page}}
+	a.route = route{page: pageBrowse, src: "fake", id: "listening-modes"}
 	tt := ui.NewTester(a.view, 1200, 900)
 	settled(tt)
-	tt.Scroll(800, 400, 0, 100000)
-	settled(tt)
-	if len(asked) != 0 {
-		t.Fatal("scrolling must not fetch without clicking the manual continuation")
-	}
-	if err := tt.Click(root.Sections[len(root.Sections)-1].Links[0].Title); err != nil {
-		t.Fatal(err)
-	}
-	nextPage := root.Sections[len(root.Sections)-1].Links[0].Page
-	if page := wait(t, asked, "discovery continuation"); page != nextPage {
-		t.Fatal("continuation lost its plugin route")
+	if page := wait(t, asked, "the batch after the last page"); page != next {
+		t.Fatalf("asked for %q, want %q", page, next)
 	}
 	runPost(t, ch)
 	settled(tt)
-	tt.Key(0, ui.KeyBack)
-	tt.Frame()
-	if a.route.id != "listening-modes" {
-		t.Fatal("back lost discovery root")
-	}
-	tt.Key(0, ui.KeyForward)
-	tt.Frame()
-	if a.route.id != nextPage || len(asked) != 0 {
-		t.Fatal("forward did not use native page cache")
-	}
-	station := fixture.Pages[nextPage].Sections[0].Stations[0]
-	fake(a).stationNext = func(id string) ([]music.Track, error) { asked <- id; return sourced(fixture.Tracks...), nil }
-	if err := tt.Click(station.Name); err != nil {
+	if err := tt.Click("Next page"); err != nil {
 		t.Fatal(err)
 	}
-	if id := wait(t, asked, "picture radio playback"); id != station.ID {
-		t.Fatal("picture radio lost its identity")
+	settled(tt)
+	if _, ok := tt.Find("2 / 2"); !ok {
+		t.Fatalf("the row shows %q, want 2 / 2", tt.Texts())
 	}
-	until(t, ch, func() bool { return a.pl.Radio() != "" })
-	_, id, _ := radioParts(a.pl.Radio())
-	if id != station.ID {
-		t.Fatal("picture card started a different radio")
+	// See All opens the complete catalog, and back returns to the page turned
+	// to, without asking the plugin for it again.
+	if err := tt.Click("See All"); err != nil {
+		t.Fatal(err)
+	}
+	settled(tt)
+	if a.route.id != "scene-modes" {
+		t.Fatalf("See All opened %q", a.route.id)
+	}
+	tt.Key(0, ui.KeyBack)
+	settled(tt)
+	if a.route.id != "listening-modes" {
+		t.Fatalf("back went to %q", a.route.id)
+	}
+	if _, ok := tt.Find("2 / 2"); !ok {
+		t.Fatalf("back shows %q, want 2 / 2", tt.Texts())
+	}
+	// The host may load the page it went back to anew; the batch the pager
+	// already holds is not asked for again.
+	for len(asked) > 0 {
+		if page := <-asked; page == next {
+			t.Fatal("going back asked for the batch it held again")
+		}
 	}
 }
 
@@ -229,4 +243,46 @@ func TestQishui105RecommendationControls(t *testing.T) {
 		t.Fatal("common mode did not switch its feed")
 	}
 	until(t, ch, func() bool { _, id, _ := radioParts(a.pl.Radio()); return id == fixture.Stations[2].ID })
+}
+
+// The exploration row pages on with the batch the plugin names after it, which
+// the same row reaches without leaving the page it is on.
+func TestQishui105PagerAsksForTheNextBatch(t *testing.T) {
+	fixture := loadQishuiSceneFixtures(t)
+	a := qishuiSceneApp(t, fixture)
+	ch := posts(a)
+	page := *fixture.Pages["listening-modes"]
+	next := page.Sections[len(page.Sections)-1].NextPage
+	if next == "" {
+		t.Fatal("the exploration section names no page after it")
+	}
+	asked := make(chan string, 8)
+	fake(a).browse = func(page string) (*music.Browse, error) {
+		asked <- page
+		return fixture.Pages[next], nil
+	}
+	a.browses = map[string]*browseData{"listening-modes": {page: &page}}
+	a.route = route{page: pageBrowse, src: "fake", id: "listening-modes"}
+	tt := ui.NewTester(a.view, 1200, 900)
+	settled(tt)
+	// The last page of them shows at once, so the batch after it is asked for
+	// without turning to it first.
+	if page := wait(t, asked, "the batch after the last page"); page != next {
+		t.Fatalf("asked for %q, want %q", page, next)
+	}
+	runPost(t, ch)
+	settled(tt)
+	if _, ok := tt.Find("示例电台 46"); !ok {
+		t.Fatalf("the batch's cards aren't there: %q", tt.Texts())
+	}
+	if _, ok := tt.Find("1 / 2"); !ok {
+		t.Fatalf("the row shows %q, want 1 / 2", tt.Texts())
+	}
+	if err := tt.Click("Next page"); err != nil {
+		t.Fatal(err)
+	}
+	settled(tt)
+	if _, ok := tt.Find("2 / 2"); !ok {
+		t.Fatalf("turning to the batch shows %q, want 2 / 2", tt.Texts())
+	}
 }

@@ -319,10 +319,13 @@ function homePage(discoveries) {
     title: "汽水音乐",
     subtitle: "听点新鲜的，也遇见喜欢的。",
     // Keep the section even for an empty result, so MyGO does not fall back to
-    // its personal-library Home. See All still reaches the full discovery page.
+    // its personal-library Home. The pager turns the preview sideways; its last
+    // card opens the full discovery page rather than asking for another batch.
     sections: [{
       ...discoverySection(discoveries.slice(0, PREVIEW_SIZE)),
-      morePage: "listening-modes"
+      pager: true,
+      morePage: "listening-modes",
+      ...discoveries.length > PREVIEW_SIZE ? { links: [{ title: "更多", subtitle: "查看全部听歌模式", page: "listening-modes" }] } : {}
     }]
   };
 }
@@ -1720,8 +1723,8 @@ function scenePage(modes, page = "listening-modes", discoveries = []) {
   }
   if (page !== "listening-modes") throw error("unsupported");
   return { title: "听歌模式", subtitle: "选择常用模式，或用图片发现更多音乐", sections: [
-    ...modes.length ? [{ title: "常用模式", stations: modes.slice(0, 8).map(station), ...modes.length > 8 ? { morePage: "scene-modes" } : {} }] : [],
-    ...discoveries.length ? [discoverySection(discoveries)] : []
+    ...modes.length ? [{ title: "常用模式", oneRow: true, stations: modes.slice(0, 8).map(station), ...modes.length > 8 ? { morePage: "scene-modes" } : {} }] : [],
+    ...discoveries.length ? [{ ...discoverySection(discoveries), pager: true }] : []
   ] };
 }
 
@@ -2679,7 +2682,7 @@ async function music(method, params = {}, persistent = false) {
         if (params.state == null) throw authError("response");
         const page = await catalog.discoveryPage(params.state);
         current();
-        return { result: { title: "探索更多新模式", sections: [discoverySection(page.items)] }, discovery: page.state, more: page.more };
+        return { result: { title: "探索更多新模式", sections: [{ ...discoverySection(page.items), pager: true }] }, discovery: page.state, more: page.more };
       }
       case "radio": {
         const reply = await catalog.radioBatch(params);
@@ -2847,14 +2850,16 @@ async function stations() {
 async function stationNext({ id }) {
   return nextFeed(id);
 }
-function discoveryResult(reply) {
+function discoveryResult(reply, { reset = false } = {}) {
   const result = reply.result;
-  if (reply.more && reply.discovery) {
+  const section = result.sections.find((entry) => entry.pager);
+  if (section && reply.more && reply.discovery) {
     while (discoveryPages.size >= 100) discoveryPages.delete(discoveryPages.keys().next().value);
     const page = `listening-modes:more:${++browseSequence}`;
     discoveryPages.set(page, { state: reply.discovery, result: null, pending: null });
-    result.sections.push({ links: [{ title: t("换一批"), subtitle: t("查看另一批探索内容"), page }] });
+    section.nextPage = page;
   }
+  if (section && reset) section.resetPager = true;
   return result;
 }
 async function browse({ page }) {
@@ -2867,7 +2872,7 @@ async function browse({ page }) {
   }
   if (typeof page === "string" && /^listening-modes:more:[1-9]\d{0,14}$/.test(page)) {
     const saved = discoveryPages.get(page);
-    if (!saved) throw fail("unsupported", t("此探索页面已过期，请重新打开听歌模式。"));
+    if (!saved) return discoveryResult(await music("modePage", { page: "listening-modes" }), { reset: true });
     if (saved.result) return saved.result;
     if (!saved.pending) {
       const attempt = generation;

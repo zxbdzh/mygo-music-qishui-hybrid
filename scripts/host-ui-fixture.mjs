@@ -34,7 +34,7 @@ const s = await sandbox([], session, { sign: true, request: service.request })
 try {
   const home = await s.api.home()
   const landing = await s.api.browse({ page: 'listening-modes' })
-  const more = landing.sections.at(-1).links[0].page
+  const more = landing.sections.find(section => section.pager).nextPage
   const pages = { home, 'listening-modes': landing, [more]: await s.api.browse({ page: more }), 'scene-modes': await s.api.browse({ page: 'scene-modes' }) }
   const stations = await s.api.stations()
   const tracks = await s.api.stationNext({ id: 'recommendations' })

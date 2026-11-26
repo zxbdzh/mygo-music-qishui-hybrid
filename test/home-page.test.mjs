@@ -11,9 +11,13 @@ test('home previews fifteen discovery resources and links to the full exploratio
   assert.equal(home.sections.length, 1)
   const discovery = home.sections[0]
   assert.equal(discovery.morePage, 'listening-modes')
+  assert.equal(discovery.pager, true)
   assert.deepEqual(discovery.playlists, [discoveries[1].item])
   assert.deepEqual(discovery.stations, discoveries.slice(0, 15).filter(d => d.type === 'radio').map(d => d.item))
-  assert.equal(home.sections.some(s => s.links || s.stations?.some(s => s.id === 'recommendations')), false)
+  // The preview pages on without asking for more: its last card opens the full exploration page.
+  assert.equal(discovery.nextPage, undefined)
+  assert.deepEqual(discovery.links, [{ title: '更多', subtitle: '查看全部听歌模式', page: 'listening-modes' }])
+  assert.equal(home.sections.some(s => s.stations?.some(s => s.id === 'recommendations')), false)
   assert.equal(discoveries.length, 20)
 })
 
@@ -24,6 +28,7 @@ test('empty and short discovery keep the home destination without fabricated car
   assert.equal(empty.sections[0].morePage, 'listening-modes')
   assert.equal(empty.sections[0].playlists, undefined)
   assert.equal(empty.sections[0].stations, undefined)
+  assert.equal(empty.sections[0].links, undefined)
   assert.deepEqual(homePage(discoveries.slice(0, 1)).sections[0].stations, [discoveries[0].item])
   assert.throws(() => homePage(null), { kind: 'response' })
 })
