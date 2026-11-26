@@ -1,28 +1,25 @@
-name: build-macos
-# Builds the two macOS runtime packages on an Apple Silicon runner, because
-# package.mjs refuses to build darwin targets anywhere else. Windows packages
-# are built locally; this workflow only fills the gap CI can cover.
+name: build-and-release
+# Builds every runtime package and attaches them to the tag's Release.
+# package.mjs refuses darwin targets outside macOS docker runs, so all four
+# targets are built here on one Apple Silicon runner; the Windows targets only
+# need Go and Zig cross-compilation.
 on:
   workflow_dispatch:
     inputs:
       version:
         description: Version to build (must match plugin.json)
         required: true
+      publish:
+        description: Upload to the v<version> Release and publish it
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  darwin:
+  packages:
     runs-on: macos-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - arch: arm64
-            target: darwin-arm64
-          - arch: amd64
-            target: darwin-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,7 +27,6 @@ jobs:
           node-version: '22'
       - uses: actions/setup-go@v5
         with:
-          # go.mod asks for 1.27; the runner's bundled Go may be older.
           go-version: '1.27'
           cache: false
       - name: Verify manifest version
@@ -38,17 +34,46 @@ jobs:
           node -e "const v=require('./plugin.json').version; if (v!=='${{ inputs.version }}') { console.error('plugin.json is '+v); process.exit(1) }"
       - name: Install dependencies
         run: npm ci
-      - name: Fetch pinned official SDK
-        run: node scripts/prepare-darwin.mjs "$RUNNER_TEMP/native-${{ matrix.arch }}" ${{ matrix.arch }}
-      - name: Build package
+      - name: Fetch Zig 0.15.2
+        run: |
+          curl -fsSL -o zig.tar.xz https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz
+          tar -xf zig.tar.xz
+          echo "QISHUI_ZIG=$PWD/zig-aarch64-macos-0.15.2/zig" >> "$GITHUB_ENV"
+      - name: Fetch pinned official SDKs
+        run: |
+          node scripts/prepare-darwin.mjs "$RUNNER_TEMP/native-arm64" arm64
+          node scripts/prepare-darwin.mjs "$RUNNER_TEMP/native-amd64" amd64
+          node scripts/prepare-windows.mjs "$RUNNER_TEMP/native-windows"
+      - name: Build all four packages
         env:
-          QISHUI_NATIVE_DIR: ${{ matrix.arch == 'arm64' && format('{0}/native-arm64', runner.temp) || '' }}
-          QISHUI_DARWIN_AMD64_NATIVE_DIR: ${{ matrix.arch == 'amd64' && format('{0}/native-amd64', runner.temp) || '' }}
-        run: npm run package -- --target ${{ matrix.target }}
+          QISHUI_NATIVE_DIR: ${{ format('{0}/native-arm64', runner.temp) }}
+          QISHUI_DARWIN_AMD64_NATIVE_DIR: ${{ format('{0}/native-amd64', runner.temp) }}
+          QISHUI_WINDOWS_ASSETS: ${{ format('{0}/native-windows', runner.temp) }}
+        run: |
+          for target in darwin-arm64 darwin-amd64 windows-amd64 windows-arm64; do
+            npm run package -- --target "$target"
+          done
+      - name: Rename to release asset names
+        run: |
+          mkdir -p release-assets
+          for f in dist/plugin-*-1.2.0-*.zip; do
+            case "$f" in *validation*) continue;; esac
+            base=$(basename "$f")
+            # plugin-<goos>-<goarch>-<version>-<timestamp>.zip -> plugin-<goos>-<goarch>.zip
+            name=$(echo "$base" | sed -E 's/^(plugin-[a-z0-9]+-[a-z0-9]+)-[0-9.]+-[0-9]+\.zip$/\1.zip/')
+            cp "$f" "release-assets/$name"
+          done
+          ls -l release-assets
       - uses: actions/upload-artifact@v4
         with:
-          name: plugin-${{ matrix.target }}-${{ inputs.version }}
-          path: |
-            dist/plugin-${{ matrix.target }}-${{ inputs.version }}-*.zip
-            !dist/*validation*
+          name: release-assets-${{ inputs.version }}
+          path: release-assets/*.zip
           if-no-files-found: error
+      - name: Attach to Release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "v${{ inputs.version }}" >/dev/null
+          gh release upload "v${{ inputs.version }}" release-assets/*.zip --clobber
+          gh release edit "v${{ inputs.version }}" --draft=false --latest
