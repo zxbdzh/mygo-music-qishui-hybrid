@@ -7,6 +7,26 @@ const USER_AGENT = 'lx-music-desktop/2.99.0';
 const QUALITY = { standard: '128k', high: '320k', lossless: 'flac' };
 export const SCRIPT_CACHE = 'lx-script:';
 
+async function readBytes(reply, limit) {
+  if (!reply.body) return new Uint8Array();
+  const reader = reply.body.getReader();
+  const bytes = new Uint8Array(limit);
+  let length = 0;
+  try {
+    while (length < limit) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = value.subarray(0, limit - length);
+      bytes.set(chunk, length);
+      length += chunk.length;
+    }
+    return bytes.subarray(0, length);
+  } finally {
+    // CDN 可能忽略 Range，主动停止读取，避免取链阶段下载整首歌。
+    try { await reader.cancel(); } finally { reader.releaseLock(); }
+  }
+}
+
 export function mapQuality(quality) {
   // 未知档位按 high 请求，避免把宿主不认识的取值直接发给解析服务。
   return QUALITY[quality] || QUALITY.high;
@@ -39,7 +59,9 @@ export function parseScript(text) {
   const key = /\bAPI_KEY\s*=\s*["'`]([^"'`\s]+)["'`]/.exec(text)?.[1] || '';
   // 平台名在对象与 JSON.parse 两种写法里都带引号，一个正则即可判定。
   const qs = /["']qs["']\s*:/.test(text);
-  return { apiUrl, key, qs };
+  // 两种 LX 服务协议：POST + musicId（如 c.wwwweb.top）与 GET + songId。
+  const protocol = /method:\s*["'`]POST["'`]/i.test(text) && /\bmusicId\b/.test(text) ? 'post' : 'get';
+  return { apiUrl, key, qs, protocol };
 }
 
 function urlKey(url) {
@@ -49,8 +71,10 @@ function urlKey(url) {
 // 拉取脚本并抽取声明；成功与不支持都写入缓存，改地址（含换 key）即换缓存键。
 export async function loadScript({ url, storage, md5, request = fetch, timeout = SCRIPT_TIMEOUT }) {
   const cacheKey = SCRIPT_CACHE + md5(url);
-  const cached = storage.get(cacheKey);
-  if (cached && cached.v === 1) return cached;
+  let cached;
+  try { cached = storage.get(cacheKey); } catch { /* 缓存不可用时仍允许正常取链。 */ }
+  // 旧缓存没有有效期，必须重取；短暂断网不能永久禁用同一脚本。
+  if (cached?.v === 1 && Number.isFinite(cached.expiresAt) && cached.expiresAt > Date.now()) return cached;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   let entry;
@@ -60,17 +84,20 @@ export async function loadScript({ url, storage, md5, request = fetch, timeout =
       headers: { 'User-Agent': USER_AGENT },
     });
     if (!reply || reply.status !== 200) throw new Error('external source: script status');
-    const parsed = parseScript(await reply.text());
+    const bytes = await readBytes(reply, SCRIPT_LIMIT + 1);
+    const parsed = bytes.length > SCRIPT_LIMIT ? null : parseScript(new TextDecoder().decode(bytes));
     entry = parsed
-      ? { v: 1, ok: true, qs: parsed.qs, apiUrl: parsed.apiUrl, key: parsed.key || urlKey(url), reason: '' }
-      : { v: 1, ok: false, qs: false, apiUrl: '', key: '', reason: 'script' };
+      ? { v: 1, ok: true, qs: parsed.qs, apiUrl: parsed.apiUrl, key: parsed.key || urlKey(url), protocol: parsed.protocol, reason: '' }
+      : { v: 1, ok: false, qs: false, apiUrl: '', key: '', protocol: 'get', reason: 'script' };
   } catch (error) {
-    // 超时与解析失败都缓存，避免每首歌重复拉同一份坏脚本。
-    entry = { v: 1, ok: false, qs: false, apiUrl: '', key: '', reason: error?.name === 'AbortError' ? 'timeout' : 'script' };
+    // 网络失败仅短暂缓存，服务恢复后下一次播放可以自动重试。
+    entry = { v: 1, ok: false, qs: false, apiUrl: '', key: '', protocol: 'get', reason: error?.name === 'AbortError' ? 'timeout' : 'script', transient: true };
   } finally {
     clearTimeout(timer);
   }
-  storage.set(cacheKey, entry);
+  const ttl = entry.ok && entry.qs ? 24 * 60 * 60 * 1000 : entry.transient ? 60 * 1000 : 10 * 60 * 1000;
+  entry.expiresAt = Date.now() + ttl;
+  try { storage.set(cacheKey, entry); } catch { /* 缓存写入失败不应丢弃已解析的音源。 */ }
   return entry;
 }
 
@@ -110,23 +137,49 @@ function actualQuality(url, payload, requested) {
   return REQUESTED[requested] || ACTUAL['320k'];
 }
 
-export async function resolveExternal({ apiUrl, key, id, quality, request = fetch, timeout = MUSIC_TIMEOUT }) {
-  // 脚本声明的 API_URL 是基址，取地址端点固定在 /music/url。
+async function verifyAudio(url, request, signal) {
+  const reply = await request(url, { headers: { Range: 'bytes=0-8191' }, redirect: 'error', signal });
+  if (!reply || ![200, 206].includes(reply.status)) throw new Error('external source: media status');
+  const bytes = await readBytes(reply, 12);
+  if (bytes.length < 8) throw new Error('external source: media header');
+  const tag = String.fromCharCode(...bytes.slice(0, 4));
+  if (tag === 'fLaC') return 'flac';
+  if (tag === 'OggS') return 'ogg';
+  if (tag === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WAVE') return 'wav';
+  if (String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp') return 'm4a';
+  // ADTS AAC 与 MP3 都有帧同步，必须先分开再返回给对应解码器。
+  if (bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0) return 'aac';
+  if (tag.startsWith('ID3') || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)) return 'mp3';
+  throw new Error('external source: unsupported media');
+}
+
+export async function resolveExternal({ apiUrl, key, id, quality, protocol = 'get', request = fetch, timeout = MUSIC_TIMEOUT }) {
+  // 脚本声明的 API_URL 是基址，取地址端点固定在 /music/url；两种服务只是方法和字段不同。
   const target = new URL(apiUrl.replace(/\/+$/, '') + '/music/url');
-  target.searchParams.set('source', 'qs');
-  target.searchParams.set('songId', id);
-  target.searchParams.set('quality', mapQuality(quality));
   const headers = { 'User-Agent': USER_AGENT, 'Content-Type': 'application/json' };
   if (key) headers['X-API-Key'] = key;
+  let init = { method: 'GET', headers };
+  if (protocol === 'post') {
+    // 备用服务按 LX 官方插件约定：POST + musicId，GET 会 404。
+    init = { method: 'POST', headers, body: JSON.stringify({ source: 'qs', musicId: id, quality: mapQuality(quality) }) };
+  } else {
+    target.searchParams.set('source', 'qs');
+    target.searchParams.set('songId', id);
+    target.searchParams.set('quality', mapQuality(quality));
+  }
   // 宿主有播放超时，这里的请求必须自己先收尾，不能拖住 stream()。
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const reply = await request(target.href, { method: 'GET', headers, signal: controller.signal });
+    const reply = await request(target.href, { ...init, signal: controller.signal });
     if (!reply || reply.status !== 200) throw new Error('external source: http status');
     const payload = await reply.json();
     const url = assertSafeURL(resolveUrl(payload));
-    return { url, ...actualQuality(url, payload, quality) };
+    // 业务成功仍可能返回过期链接或错误页，交给播放器前先用字节确认容器。
+    const type = await verifyAudio(url, request, controller.signal);
+    const reported = actualQuality(url, payload, quality).quality;
+    const actual = type === 'flac' || type === 'wav' ? 'lossless' : reported === 'lossless' ? 'high' : reported;
+    return { url, type, quality: actual };
   } finally {
     clearTimeout(timer);
   }

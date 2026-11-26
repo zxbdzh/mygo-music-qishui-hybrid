@@ -906,10 +906,11 @@ function externalSourceSettings() {
     try { return String(host.setting(key) ?? ''); } catch { return ''; }
   };
   if (read('externalSourceEnabled') !== 'true') return null;
-  const script = read('externalSourceScript');
-  // 脚本地址只能走 HTTPS：官方路径才是唯一可信的回落目标。
-  if (!/^https:\/\/\S+$/.test(script)) return null;
-  return { script };
+  // 主脚本失败时按顺序再试备用脚本；同一地址只保留一份，避免重复请求。
+  const scripts = [...new Set([read('externalSourceScript'), read('externalSourceBackupScript')])]
+    // 脚本地址只能走 HTTPS：官方路径才是唯一可信的回落目标。
+    .filter(script => /^https:\/\/\S+$/.test(script));
+  return scripts.length ? { scripts } : null;
 }
 
 // 任一环节失败都静默回落：不修改 session、不写 storage、不触碰登录态。
@@ -917,18 +918,20 @@ async function externalStream({ id, quality }) {
   const settings = externalSourceSettings();
   // 只有汽水 track_id 与音源有映射关系；其它来源的 ID 不值得发出去。
   if (!settings || !/^\d{1,32}$/.test(typeof id === 'string' ? id : '')) return null;
-  try {
-    const source = await loadScript({ url: settings.script, storage: host.storage, md5: text => host.crypto.md5(text) });
-    // 不是 LX 脚本或脚本不含汽水音源，都直接回落，不再请求取地址接口。
-    if (!source.ok) throw Object.assign(new Error('external source: script'), { reason: source.reason });
-    if (!source.qs) throw Object.assign(new Error('external source: unsupported'), { reason: 'unsupported' });
-    return await resolveExternal({ apiUrl: source.apiUrl, key: source.key, id, quality });
-  } catch (error) {
-    // 宿主只给了 console；只记录归一化原因，绝不带出 key、脚本地址或带签名的直链。
-    const reason = error?.reason || (error?.name === 'AbortError' ? 'timeout' : 'failure');
-    try { console.warn(`external source fallback: ${reason}`); } catch { /* 日志不是播放前提。 */ }
-    return null;
+  for (const script of settings.scripts) {
+    try {
+      const source = await loadScript({ url: script, storage: host.storage, md5: text => host.crypto.md5(text) });
+      // 不是 LX 脚本或脚本不含汽水音源，都直接换下一个源。
+      if (!source.ok) throw Object.assign(new Error('external source: script'), { reason: source.reason });
+      if (!source.qs) throw Object.assign(new Error('external source: unsupported'), { reason: 'unsupported' });
+      return await resolveExternal({ apiUrl: source.apiUrl, key: source.key, id, quality, protocol: source.protocol });
+    } catch (error) {
+      // 宿主只给了 console；只记录归一化原因，绝不带出 key、脚本地址或带签名的直链。
+      const reason = error?.reason || (error?.name === 'AbortError' ? 'timeout' : 'failure');
+      try { console.warn(`external source fallback: ${reason}`); } catch { /* 日志不是播放前提。 */ }
+    }
   }
+  return null;
 }
 
 export async function stream({ id, quality = "high" }) {

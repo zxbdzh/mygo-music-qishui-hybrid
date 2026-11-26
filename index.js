@@ -1735,6 +1735,28 @@ var SCRIPT_LIMIT = 262144;
 var USER_AGENT = "lx-music-desktop/2.99.0";
 var QUALITY = { standard: "128k", high: "320k", lossless: "flac" };
 var SCRIPT_CACHE = "lx-script:";
+async function readBytes(reply, limit) {
+  if (!reply.body) return new Uint8Array();
+  const reader = reply.body.getReader();
+  const bytes = new Uint8Array(limit);
+  let length = 0;
+  try {
+    while (length < limit) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = value.subarray(0, limit - length);
+      bytes.set(chunk, length);
+      length += chunk.length;
+    }
+    return bytes.subarray(0, length);
+  } finally {
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
+    }
+  }
+}
 function mapQuality(quality) {
   return QUALITY[quality] || QUALITY.high;
 }
@@ -1766,7 +1788,8 @@ function parseScript(text) {
   }
   const key = /\bAPI_KEY\s*=\s*["'`]([^"'`\s]+)["'`]/.exec(text)?.[1] || "";
   const qs = /["']qs["']\s*:/.test(text);
-  return { apiUrl, key, qs };
+  const protocol = /method:\s*["'`]POST["'`]/i.test(text) && /\bmusicId\b/.test(text) ? "post" : "get";
+  return { apiUrl, key, qs, protocol };
 }
 function urlKey(url) {
   try {
@@ -1777,8 +1800,12 @@ function urlKey(url) {
 }
 async function loadScript({ url, storage, md5, request = fetch, timeout = SCRIPT_TIMEOUT }) {
   const cacheKey = SCRIPT_CACHE + md5(url);
-  const cached = storage.get(cacheKey);
-  if (cached && cached.v === 1) return cached;
+  let cached;
+  try {
+    cached = storage.get(cacheKey);
+  } catch {
+  }
+  if (cached?.v === 1 && Number.isFinite(cached.expiresAt) && cached.expiresAt > Date.now()) return cached;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   let entry;
@@ -1790,14 +1817,20 @@ async function loadScript({ url, storage, md5, request = fetch, timeout = SCRIPT
       headers: { "User-Agent": USER_AGENT }
     });
     if (!reply || reply.status !== 200) throw new Error("external source: script status");
-    const parsed = parseScript(await reply.text());
-    entry = parsed ? { v: 1, ok: true, qs: parsed.qs, apiUrl: parsed.apiUrl, key: parsed.key || urlKey(url), reason: "" } : { v: 1, ok: false, qs: false, apiUrl: "", key: "", reason: "script" };
+    const bytes = await readBytes(reply, SCRIPT_LIMIT + 1);
+    const parsed = bytes.length > SCRIPT_LIMIT ? null : parseScript(new TextDecoder().decode(bytes));
+    entry = parsed ? { v: 1, ok: true, qs: parsed.qs, apiUrl: parsed.apiUrl, key: parsed.key || urlKey(url), protocol: parsed.protocol, reason: "" } : { v: 1, ok: false, qs: false, apiUrl: "", key: "", protocol: "get", reason: "script" };
   } catch (error2) {
-    entry = { v: 1, ok: false, qs: false, apiUrl: "", key: "", reason: error2?.name === "AbortError" ? "timeout" : "script" };
+    entry = { v: 1, ok: false, qs: false, apiUrl: "", key: "", protocol: "get", reason: error2?.name === "AbortError" ? "timeout" : "script", transient: true };
   } finally {
     clearTimeout(timer);
   }
-  storage.set(cacheKey, entry);
+  const ttl = entry.ok && entry.qs ? 24 * 60 * 60 * 1e3 : entry.transient ? 60 * 1e3 : 10 * 60 * 1e3;
+  entry.expiresAt = Date.now() + ttl;
+  try {
+    storage.set(cacheKey, entry);
+  } catch {
+  }
   return entry;
 }
 function resolveUrl(payload) {
@@ -1829,21 +1862,43 @@ function actualQuality(url, payload, requested) {
   if (container) return requested === "lossless" ? ACTUAL["128k"] : REQUESTED[requested] || ACTUAL["320k"];
   return REQUESTED[requested] || ACTUAL["320k"];
 }
-async function resolveExternal({ apiUrl, key, id, quality, request = fetch, timeout = MUSIC_TIMEOUT }) {
+async function verifyAudio(url, request, signal) {
+  const reply = await request(url, { headers: { Range: "bytes=0-8191" }, redirect: "error", signal });
+  if (!reply || ![200, 206].includes(reply.status)) throw new Error("external source: media status");
+  const bytes = await readBytes(reply, 12);
+  if (bytes.length < 8) throw new Error("external source: media header");
+  const tag = String.fromCharCode(...bytes.slice(0, 4));
+  if (tag === "fLaC") return "flac";
+  if (tag === "OggS") return "ogg";
+  if (tag === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WAVE") return "wav";
+  if (String.fromCharCode(...bytes.slice(4, 8)) === "ftyp") return "m4a";
+  if (bytes[0] === 255 && (bytes[1] & 246) === 240) return "aac";
+  if (tag.startsWith("ID3") || bytes[0] === 255 && (bytes[1] & 224) === 224) return "mp3";
+  throw new Error("external source: unsupported media");
+}
+async function resolveExternal({ apiUrl, key, id, quality, protocol = "get", request = fetch, timeout = MUSIC_TIMEOUT }) {
   const target = new URL(apiUrl.replace(/\/+$/, "") + "/music/url");
-  target.searchParams.set("source", "qs");
-  target.searchParams.set("songId", id);
-  target.searchParams.set("quality", mapQuality(quality));
   const headers = { "User-Agent": USER_AGENT, "Content-Type": "application/json" };
   if (key) headers["X-API-Key"] = key;
+  let init = { method: "GET", headers };
+  if (protocol === "post") {
+    init = { method: "POST", headers, body: JSON.stringify({ source: "qs", musicId: id, quality: mapQuality(quality) }) };
+  } else {
+    target.searchParams.set("source", "qs");
+    target.searchParams.set("songId", id);
+    target.searchParams.set("quality", mapQuality(quality));
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const reply = await request(target.href, { method: "GET", headers, signal: controller.signal });
+    const reply = await request(target.href, { ...init, signal: controller.signal });
     if (!reply || reply.status !== 200) throw new Error("external source: http status");
     const payload = await reply.json();
     const url = assertSafeURL(resolveUrl(payload));
-    return { url, ...actualQuality(url, payload, quality) };
+    const type = await verifyAudio(url, request, controller.signal);
+    const reported = actualQuality(url, payload, quality).quality;
+    const actual = type === "flac" || type === "wav" ? "lossless" : reported === "lossless" ? "high" : reported;
+    return { url, type, quality: actual };
   } finally {
     clearTimeout(timer);
   }
@@ -2917,26 +2972,27 @@ function externalSourceSettings() {
     }
   };
   if (read("externalSourceEnabled") !== "true") return null;
-  const script = read("externalSourceScript");
-  if (!/^https:\/\/\S+$/.test(script)) return null;
-  return { script };
+  const scripts = [.../* @__PURE__ */ new Set([read("externalSourceScript"), read("externalSourceBackupScript")])].filter((script) => /^https:\/\/\S+$/.test(script));
+  return scripts.length ? { scripts } : null;
 }
 async function externalStream({ id, quality }) {
   const settings = externalSourceSettings();
   if (!settings || !/^\d{1,32}$/.test(typeof id === "string" ? id : "")) return null;
-  try {
-    const source = await loadScript({ url: settings.script, storage: host.storage, md5: (text) => host.crypto.md5(text) });
-    if (!source.ok) throw Object.assign(new Error("external source: script"), { reason: source.reason });
-    if (!source.qs) throw Object.assign(new Error("external source: unsupported"), { reason: "unsupported" });
-    return await resolveExternal({ apiUrl: source.apiUrl, key: source.key, id, quality });
-  } catch (error2) {
-    const reason = error2?.reason || (error2?.name === "AbortError" ? "timeout" : "failure");
+  for (const script of settings.scripts) {
     try {
-      console.warn(`external source fallback: ${reason}`);
-    } catch {
+      const source = await loadScript({ url: script, storage: host.storage, md5: (text) => host.crypto.md5(text) });
+      if (!source.ok) throw Object.assign(new Error("external source: script"), { reason: source.reason });
+      if (!source.qs) throw Object.assign(new Error("external source: unsupported"), { reason: "unsupported" });
+      return await resolveExternal({ apiUrl: source.apiUrl, key: source.key, id, quality, protocol: source.protocol });
+    } catch (error2) {
+      const reason = error2?.reason || (error2?.name === "AbortError" ? "timeout" : "failure");
+      try {
+        console.warn(`external source fallback: ${reason}`);
+      } catch {
+      }
     }
-    return null;
   }
+  return null;
 }
 async function stream({ id, quality = "high" }) {
   const external = await externalStream({ id, quality });

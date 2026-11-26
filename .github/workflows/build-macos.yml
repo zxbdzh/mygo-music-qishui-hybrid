@@ -56,7 +56,7 @@ jobs:
       - name: Rename to release asset names
         run: |
           mkdir -p release-assets
-          for f in dist/plugin-*-1.2.0-*.zip; do
+          for f in dist/plugin-*-${{ inputs.version }}-*.zip; do
             case "$f" in *validation*) continue;; esac
             base=$(basename "$f")
             # plugin-<goos>-<goarch>-<version>-<timestamp>.zip -> plugin-<goos>-<goarch>.zip

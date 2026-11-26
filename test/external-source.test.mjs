@@ -16,9 +16,22 @@ const script = [
 const js = (body = script) => new Response(body, { headers: { 'content-type': 'application/javascript' } })
 const isScript = url => String(url) === scriptUrl
 const isMusic = url => String(url).startsWith(endpoint)
+const audio = type => new Response(Uint8Array.from(type === 'flac'
+  ? [102, 76, 97, 67, 0, 0, 0, 0]
+  : [0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 65, 32]), { status: 206 })
+
+// 媒体响应也走夹具，避免成功取链测试意外访问真实 CDN。
+const pluginSandbox = sandbox
+async function audioSandbox(queues, saved, options) {
+  const request = options?.request
+  return pluginSandbox(queues, saved, { ...options, request: async (url, init) => {
+    if (init?.headers?.Range) return audio(options?.mediaType || (String(url).endsWith('.m4a') ? 'm4a' : 'flac'))
+    return request?.(url, init)
+  } })
+}
 
 test('脚本解析成功后走音源，不启动 Go worker', async () => {
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async url => isScript(url) ? js() : isMusic(url) ? json({ code: 200, url: 'https://cdn.test/song.flac' }) : undefined,
   })
@@ -29,7 +42,7 @@ test('脚本解析成功后走音源，不启动 Go worker', async () => {
 })
 
 test('脚本没有 qs 音源时回落官方', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:1/x', type: 'm4a', quality: 'high', size: 1 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:1/x', type: 'm4a', quality: 'high', size: 1 } }]], session, {
     settings,
     request: async url => isScript(url)
       ? js('const API_URL = "https://audio-source.test/api";\nconst MUSIC_QUALITY = {"tx":["128k"]};')
@@ -42,7 +55,7 @@ test('脚本没有 qs 音源时回落官方', async () => {
 
 test('同一脚本只拉取一次', async () => {
   let pulled = 0
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async url => {
       if (isScript(url)) { pulled++; return js() }
@@ -56,7 +69,7 @@ test('同一脚本只拉取一次', async () => {
 })
 
 test('填成直连接口地址时不再兼容', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:2/y', type: 'm4a', quality: 'high', size: 2 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:2/y', type: 'm4a', quality: 'high', size: 2 } }]], session, {
     settings: { externalSourceEnabled: 'true', externalSourceScript: endpoint },
     request: async url => isMusic(url) ? json({ code: 200, url: 'https://cdn.test/song.flac' }) : undefined,
   })
@@ -66,7 +79,7 @@ test('填成直连接口地址时不再兼容', async () => {
 })
 
 test('脚本没有 API_KEY 时用脚本地址里的 key', async () => {
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async url => isScript(url)
       ? js('const API_URL = "https://audio-source.test/api";\nconst MUSIC_QUALITY = {"qs":["flac"]};')
@@ -78,7 +91,7 @@ test('脚本没有 API_KEY 时用脚本地址里的 key', async () => {
 })
 
 test('内网地址被拒绝并回落官方路径', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:3/z', type: 'flac', quality: 'lossless', size: 3 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:3/z', type: 'flac', quality: 'lossless', size: 3 } }]], session, {
     settings,
     request: async url => isScript(url) ? js() : isMusic(url) ? json({ code: 200, url: 'http://127.0.0.1:3/z' }) : undefined,
   })
@@ -88,7 +101,7 @@ test('内网地址被拒绝并回落官方路径', async () => {
 })
 
 test('业务码失败仍是 HTTP 200 也要回落', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:4/w', type: 'm4a', quality: 'high', size: 4 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:4/w', type: 'm4a', quality: 'high', size: 4 } }]], session, {
     settings,
     // 故意带上 url：只要实现漏看业务码，就会直接采用这个地址。
     request: async url => isScript(url) ? js() : isMusic(url)
@@ -100,7 +113,7 @@ test('业务码失败仍是 HTTP 200 也要回落', async () => {
 })
 
 test('开关关闭时不请求脚本与接口', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:5/a', type: 'm4a', quality: 'high', size: 5 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:5/a', type: 'm4a', quality: 'high', size: 5 } }]], session, {
     settings: { ...settings, externalSourceEnabled: 'false' },
   })
   await box.api.stream({ id: track.id, quality: 'high' })
@@ -108,7 +121,7 @@ test('开关关闭时不请求脚本与接口', async () => {
 })
 
 test('非汽水 track_id 不发给音源', async () => {
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async () => json({ code: 200, url: 'https://cdn.test/song.flac' }),
   })
@@ -118,7 +131,7 @@ test('非汽水 track_id 不发给音源', async () => {
 })
 
 test('请求 lossless 但只回 128k 时如实标 standard', async () => {
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async url => isScript(url) ? js() : isMusic(url) ? json({ code: 200, url: 'https://cdn.test/song.m4a' }) : undefined,
   })
@@ -130,7 +143,7 @@ test('请求 lossless 但只回 128k 时如实标 standard', async () => {
 test('CDN 直链没有扩展名时按请求档位回填', async () => {
   // 真实音源返回的 douyinstatic 直链没有 .flac/.m4a 后缀。
   const url = 'https://sf6-cdn-tos.douyinstatic.com/obj/tos-cn-ve-2774/oQHnniDxQFFPYnCfkiEgopaADkNCfzW5PBf3A9'
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async u => isScript(u) ? js() : isMusic(u) ? json({ code: 200, url, type: 21, server: 3 }) : undefined,
   })
@@ -138,8 +151,8 @@ test('CDN 直链没有扩展名时按请求档位回填', async () => {
   assert.equal(s.type, 'flac')
   assert.equal(s.quality, 'lossless')
 
-  const high = await sandbox([], session, {
-    settings,
+  const high = await audioSandbox([], session, {
+    settings, mediaType: 'm4a',
     request: async u => isScript(u) ? js() : isMusic(u) ? json({ code: 200, url, type: 21 }) : undefined,
   })
   const h = await high.api.stream({ id: track.id, quality: 'high' })
@@ -148,7 +161,7 @@ test('CDN 直链没有扩展名时按请求档位回填', async () => {
 })
 
 test('回落保留登录态且日志不含密钥', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:6/b', type: 'm4a', quality: 'high', size: 6 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:6/b', type: 'm4a', quality: 'high', size: 6 } }]], session, {
     settings,
     request: async url => isScript(url) ? js() : isMusic(url)
       ? json({ code: 500, url: 'https://cdn.test/private.flac', message: '上游业务失败' })
@@ -165,7 +178,7 @@ test('回落保留登录态且日志不含密钥', async () => {
 })
 
 test('取地址接口超时后回落且日志只记原因', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:7/c', type: 'm4a', quality: 'high', size: 7 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:7/c', type: 'm4a', quality: 'high', size: 7 } }]], session, {
     settings,
     // 8 秒的接口超时在测试里立即触发；其余定时器保持真实行为。
     timer: (callback, ms) => ms === 8000 ? (queueMicrotask(callback), 0) : setTimeout(callback, ms),
@@ -181,7 +194,7 @@ test('取地址接口超时后回落且日志只记原因', async () => {
 })
 
 test('拉取脚本超时后回落且日志只记原因', async () => {
-  const box = await sandbox([[{ ok: true, result: { url: 'http://127.0.0.1:8/d', type: 'm4a', quality: 'high', size: 8 } }]], session, {
+  const box = await audioSandbox([[{ ok: true, result: { url: 'http://127.0.0.1:8/d', type: 'm4a', quality: 'high', size: 8 } }]], session, {
     settings,
     timer: (callback, ms) => ms === 5000 ? (queueMicrotask(callback), 0) : setTimeout(callback, ms),
     request: async (url, options) => isScript(url)
@@ -194,7 +207,7 @@ test('拉取脚本超时后回落且日志只记原因', async () => {
 })
 
 test('请求带 source=qs、songId、API Key 与客户端 UA', async () => {
-  const box = await sandbox([], session, {
+  const box = await audioSandbox([], session, {
     settings,
     request: async url => isScript(url) ? js() : isMusic(url) ? json({ code: 200, url: 'https://cdn.test/song.flac' }) : undefined,
   })

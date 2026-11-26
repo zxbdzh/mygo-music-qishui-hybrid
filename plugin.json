@@ -1,7 +1,7 @@
 {
   "id": "qishui-app-login",
   "name": "汽水音乐",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "minAppVersion": "0.1.26.1",
   "main": "index.js",
   "icon": "icon.png",
@@ -17,6 +17,11 @@
       "key": "externalSourceScript",
       "label": "LX 音源脚本地址",
       "help": "填完整的 LX 脚本地址，必须以 https:// 开头，例如 https://source.shiqianjiang.cn/api/script/lx?key=…。只读取脚本声明的接口，不执行脚本；更换地址后下一次播放重新读取。"
+    },
+    {
+      "key": "externalSourceBackupScript",
+      "label": "备用 LX 脚本地址",
+      "help": "可选。主脚本取不到直链时自动再试这个地址，仍然失败才回落官方播放；只读取脚本声明的接口，不执行脚本。"
     }
   ],
   "navigation": [
