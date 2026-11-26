@@ -19,6 +19,7 @@ If you find this plugin useful, consider giving [the project](https://github.com
 | Playlists | Browse playlist details and songs, with the playlist creator shown |
 | Music discovery | Home discovery, personalized recommendations, familiar / fresh recommendations, listening modes, and continuous radio playback |
 | Playback and downloads | Standard / High / Lossless quality selection, seeking, song downloads through MyGo Music, and direct M4A / FLAC playback |
+| External source | Optional: fill in an LX script URL to resolve direct audio links first, silently falling back to official playback |
 | Lyrics | Line-synced lyrics, official word-synced lyrics, and Chinese translations; falls back to line-synced lyrics when word timing is unavailable |
 | Artists and albums | Complete artist song and album lists, follow / unfollow artists, album details, and save / unsave albums |
 | Music library | Like / unlike songs, liked songs, saved playlists, saved albums, and recently played songs |
@@ -87,6 +88,23 @@ The plugin maps MyGo Music's three quality settings to Soda Music sources:
 After decryption, AAC-LC is passed directly to MyGo Music as M4A, while native FLAC is passed through unchanged. Playback no longer uses FFmpeg conversion. M4A does not imply lossless audio. When a lower-quality source is used, the plugin reports the actual source quality to the host.
 
 All settings exclude the `medium` source. Availability depends on your account's membership, region, and authorization from Soda Music. Playback is reported as unavailable when only a preview is authorized, no suitable source is available, or the format is unsupported. Selecting **Lossless** does not guarantee that every song has a lossless source.
+
+## External source (optional)
+
+Off by default. When enabled, the plugin asks an LX script where the audio is before using the official path; anything that fails silently falls back to official playback, without touching your session or account data.
+
+1. Open the plugin settings and turn on **Use external source**.
+2. Put the full LX script URL in **LX script URL**, for example:
+
+   ```text
+   https://source.shiqianjiang.cn/api/script/lx?key=your-key
+   ```
+
+3. Save and play. Changing the URL (including rotating the key) makes the next playback read the script again.
+
+The plugin only reads the endpoint, key and supported platforms declared in the script text. It **never executes the script**. If the script has no Soda Music source, the URL is wrong, or the service is unavailable, playback is still completed by the official path.
+
+> **Permission note:** script and endpoint hosts are entered by you and cannot be listed in advance, so the plugin asks for access to any website. Allow it when installing or updating. With **Use external source** off, no external request is made.
 
 ## Usage notes
 

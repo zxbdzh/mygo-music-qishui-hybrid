@@ -473,3 +473,24 @@
 系统 WebKit 登录方案仍为临时目录中的研究原型，未合入此版本。1.0.1 登录仍需本机已安装 Chrome、Chromium 或 Edge。
 
 回滚方式：在 MyGO 中移除插件后导入 v1.0.0 Release 的完整 ZIP，插件数据会保留；源码回滚可撤销 1.0.1 音乐功能提交。
+
+---
+
+## 1.2.0 发布结论（2026-11-26）
+
+外部音源改为「填一个 LX 脚本地址」。插件只读取脚本文本，抽取 `API_URL`、`API_KEY` 与是否支持 `qs`，不执行第三方脚本；网络权限因此改为任意域名。
+
+已验证：
+
+- `npm run check` 通过；音源测试 17 条、播放与插件测试合计 62 条全部通过。
+- 真实脚本实测 songId 7245043407416150018：`lossless` 返回 flac、`high` 与 `standard` 返回 m4a，后两档命中脚本缓存，均未启动 Go worker。
+- 无 `qs` 的脚本（`c.wwwweb.top`）被判不支持并回落官方路径。
+- 四个运行包的 `index.js` 与仓库一致；macOS 包内 `bdms.node` 与 `libMetaSecML.dylib` 命中固定哈希。
+- Windows 包在本机构建；macOS 两个包由 `.github/workflows/build-macos.yml` 在 GitHub 托管的 macOS runner 上构建。
+
+未验证 / 已知限制：
+
+- 未做 Windows / macOS 实机播放与安装冒烟，`VALIDATION.md` 第 1–7 步对 1.2.0 仍未执行。
+- `test/worker.test.mjs` 在 Windows 上清理临时目录报 EBUSY，全量测试因此 1 条失败；已在 `0db93ec` 独立 worktree 复现，与本版本无关。
+- macOS 包的签名器由 CI 的 clang 编译，只做了 Mach-O 架构与 `codesign --verify` 的构建期检查，未在 Apple Silicon / Intel 真机运行。
+- 脚本服务端更换 `API_URL` 后，缓存要等用户改地址才刷新。
