@@ -5,7 +5,7 @@ import path from 'node:path'
 
 const developmentHelpers = ['helper/worker.mjs', 'helper/resource.cjs', 'helper/native.mjs', 'helper/windows-native.mjs', 'helper/playback.mjs', 'helper/audio-server.mjs', 'helper/catalog.mjs', 'helper/runtime.mjs']
 export const runtimeSource = [
-  'plugin.json', 'index.js', 'package.json', 'package-lock.json', 'README.md', 'NOTICE.md', 'PLAYBACK-HISTORY.md', 'LICENSE', 'src',
+  'plugin.json', 'icon.png', 'index.js', 'package.json', 'package-lock.json', 'README.md', 'NOTICE.md', 'PLAYBACK-HISTORY.md', 'LICENSE', 'src',
   'helper/catalog-core.mjs', 'helper/protocol.mjs', 'helper/client-profile.mjs', 'helper/json-body.mjs',
   'helper/avatar.mjs', 'helper/comments.mjs', 'helper/membership.mjs', 'helper/library-actions.mjs', 'helper/lyrics.mjs', 'helper/collections.mjs',
   'helper/discovery.mjs', 'helper/history.mjs', 'helper/scene-pages.mjs', 'helper/home-page.mjs', 'helper/exploration.mjs', 'helper/external-source.mjs',
@@ -23,12 +23,14 @@ export const validationSource = [
   'native/windows-runner/tests', 'native/worker', 'native/signer', 'native/login', ...developmentHelpers,
 ]
 export function checkPackageLayout(files, { validation = false } = {}) {
+  // icon.png 是插件页的官方品牌图标，运行时包里唯一放行的图片；其余图片仍视为随包美术资源。
+  const brandedIcon = name => name === 'icon.png'
   for (const name of files) {
     if (name.startsWith('assets/')) throw new Error('Package must not contain bundled artwork: ' + name)
     if (/(?:^|\/)(?:node(?:\.exe)?|node-(?:darwin|windows|win32)-[^/]+)$/.test(name) || name === 'bin/NODE-BUILD.json') throw new Error('Package must not contain a Node runtime: ' + name)
     if (/(?:^|\/)(?:ffmpeg(?:\.exe)?|FFMPEG-(?:LICENSE|README\.txt|BUILD\.json|SOURCE\.tar\.xz)|MINGW-LICENSE|ZIG-LICENSE|WINDOWS-CRT-SOURCE\.tar\.xz|audio-convert(?:\.exe)?)$/i.test(name)) throw new Error('Package must not contain a bundled FFmpeg or converter asset: ' + name)
     if (!validation && (
-      /\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i.test(name) || name.startsWith('test/') ||
+      (/\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i.test(name) && !brandedIcon(name)) || name.startsWith('test/') ||
       /(?:^|\/)tests?(?:\/|\.)/.test(name) || /_test\.go$/.test(name) || /\.test\.(?:cpp|mjs)$/.test(name) ||
       name.startsWith('native/worker/testdata/') || name === 'native/signer/validate.mjs' ||
       /\.test(?:\.exe)?$/i.test(name) || developmentHelpers.includes(name) ||

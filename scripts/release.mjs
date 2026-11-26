@@ -668,7 +668,7 @@ async function verifyPackageContents({ root, dir, validation, version, layout, a
   if (plugin.id !== 'qishui-app-login') throw new ReleaseError('Unexpected plugin id in final package')
   const source = await verifySourceMatchesPackage({ root, dir, validation, layout })
   const required = [
-    'LICENSE', 'NOTICE.md', 'src/plugin.mjs', 'native/worker/go.mod', 'native/signer/signer.cpp',
+    'LICENSE', 'NOTICE.md', 'icon.png', 'src/plugin.mjs', 'native/worker/go.mod', 'native/signer/signer.cpp',
     'native/signer/include/NODE-LICENSE', 'native/signer/licenses/LIBCXX-LICENSE',
     'native/signer/licenses/LIBCXXABI-LICENSE', 'native/signer/licenses/LIBUNWIND-LICENSE',
     'native/signer/licenses/provenance.json',

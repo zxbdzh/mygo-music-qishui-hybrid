@@ -8,8 +8,10 @@ import { checkPackageLayout, copyPackageSource } from '../../scripts/package-lay
 
 // Reject Node executables and accidental test/legacy adapters at the archive boundary.
 test('final runtime package guard rejects Node, artwork and validation-only files', () => {
-  const runtime = ['plugin.json', 'index.js', 'bin/qishui-helper-windows-amd64.exe', 'runtime/native/qishui-sign.exe', 'runtime/native/bdms.node']
+  const runtime = ['plugin.json', 'icon.png', 'index.js', 'bin/qishui-helper-windows-amd64.exe', 'runtime/native/qishui-sign.exe', 'runtime/native/bdms.node']
   assert.doesNotThrow(() => checkPackageLayout(runtime))
+  // 插件页品牌图标是唯一放行的图片，且只在包根允许，别处的图片仍然拦。
+  assert.throws(() => checkPackageLayout([...runtime, 'helper/icon.png']), /artwork|validation-only/)
   for (const unwanted of ['assets/cover.png', 'helper/cover.png', 'test/fixtures/audio.m4a', 'runtime/native/runner.test.exe', 'native/windows-runner/tests/integration_windows_test.go', 'native/worker/server_test.go', 'native/worker/testdata/audio.m4a', 'native/signer/signer.test.cpp', 'native/signer/validate.mjs', 'helper/worker.mjs', 'helper/resource.cjs', 'scripts/verify-windows.cmd', 'scripts/build-audio-fixtures.mjs', 'scripts/release.mjs']) {
     assert.throws(() => checkPackageLayout([...runtime, unwanted]), /artwork|validation-only/)
   }
