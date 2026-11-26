@@ -1726,11 +1726,76 @@ function scenePage(modes, page = "listening-modes", discoveries = []) {
 }
 
 // helper/external-source.mjs
-var TIMEOUT = 8e3;
+var SCRIPT_TIMEOUT = 5e3;
+var MUSIC_TIMEOUT = 8e3;
+var SCRIPT_LIMIT = 262144;
 var USER_AGENT = "lx-music-desktop/2.99.0";
 var QUALITY = { standard: "128k", high: "320k", lossless: "flac" };
+var SCRIPT_CACHE = "lx-script:";
 function mapQuality(quality) {
   return QUALITY[quality] || QUALITY.high;
+}
+var PRIVATE_IPV4 = /^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
+var PRIVATE_IPV6 = /^(?:\[::1?\]$|\[::ffff:|\[f[cd][0-9a-f]{0,2}:)/i;
+function assertSafeURL(value) {
+  if (typeof value !== "string" || !value || value.length > 16384) throw new Error("external source: unsafe url");
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("external source: unsafe url");
+  }
+  if (url.protocol !== "https:") throw new Error("external source: unsafe url");
+  if (url.username || url.password) throw new Error("external source: unsafe url");
+  const host2 = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (!host2 || host2 === "localhost" || host2.endsWith(".localhost")) throw new Error("external source: unsafe url");
+  if (PRIVATE_IPV4.test(host2) || PRIVATE_IPV6.test(host2)) throw new Error("external source: unsafe url");
+  return value;
+}
+function parseScript(text) {
+  if (typeof text !== "string" || !text || text.length > SCRIPT_LIMIT) return null;
+  const apiUrl = /\bAPI_URL\s*=\s*["'`](https?:\/\/[^"'`\s]+)["'`]/.exec(text)?.[1];
+  if (!apiUrl) return null;
+  try {
+    assertSafeURL(apiUrl);
+  } catch {
+    return null;
+  }
+  const key = /\bAPI_KEY\s*=\s*["'`]([^"'`\s]+)["'`]/.exec(text)?.[1] || "";
+  const qs = /["']qs["']\s*:/.test(text);
+  return { apiUrl, key, qs };
+}
+function urlKey(url) {
+  try {
+    return new URL(url).searchParams.get("key") || "";
+  } catch {
+    return "";
+  }
+}
+async function loadScript({ url, storage, md5, request = fetch, timeout = SCRIPT_TIMEOUT }) {
+  const cacheKey = SCRIPT_CACHE + md5(url);
+  const cached = storage.get(cacheKey);
+  if (cached && cached.v === 1) return cached;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  let entry;
+  try {
+    const reply = await request(url, {
+      method: "GET",
+      redirect: "error",
+      signal: controller.signal,
+      headers: { "User-Agent": USER_AGENT }
+    });
+    if (!reply || reply.status !== 200) throw new Error("external source: script status");
+    const parsed = parseScript(await reply.text());
+    entry = parsed ? { v: 1, ok: true, qs: parsed.qs, apiUrl: parsed.apiUrl, key: parsed.key || urlKey(url), reason: "" } : { v: 1, ok: false, qs: false, apiUrl: "", key: "", reason: "script" };
+  } catch (error2) {
+    entry = { v: 1, ok: false, qs: false, apiUrl: "", key: "", reason: error2?.name === "AbortError" ? "timeout" : "script" };
+  } finally {
+    clearTimeout(timer);
+  }
+  storage.set(cacheKey, entry);
+  return entry;
 }
 function resolveUrl(payload) {
   if (!payload || typeof payload !== "object") throw new Error("external source: malformed body");
@@ -1761,36 +1826,17 @@ function actualQuality(url, payload, requested) {
   if (container) return requested === "lossless" ? ACTUAL["128k"] : REQUESTED[requested] || ACTUAL["320k"];
   return REQUESTED[requested] || ACTUAL["320k"];
 }
-var PRIVATE_IPV4 = /^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
-var PRIVATE_IPV6 = /^(?:\[::1?\]$|\[::ffff:|\[f[cd][0-9a-f]{0,2}:)/i;
-function assertSafeURL(value) {
-  if (typeof value !== "string" || !value || value.length > 16384) throw new Error("external source: unsafe url");
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("external source: unsafe url");
-  }
-  if (url.protocol !== "https:") throw new Error("external source: unsafe url");
-  if (url.username || url.password) throw new Error("external source: unsafe url");
-  const host2 = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (!host2 || host2 === "localhost" || host2.endsWith(".localhost")) throw new Error("external source: unsafe url");
-  if (PRIVATE_IPV4.test(host2) || PRIVATE_IPV6.test(host2)) throw new Error("external source: unsafe url");
-  return value;
-}
-async function resolveExternal({ endpoint, key, id, quality, request = fetch, timeout = TIMEOUT }) {
-  const target = new URL(endpoint);
+async function resolveExternal({ apiUrl, key, id, quality, request = fetch, timeout = MUSIC_TIMEOUT }) {
+  const target = new URL(apiUrl.replace(/\/+$/, "") + "/music/url");
   target.searchParams.set("source", "qs");
   target.searchParams.set("songId", id);
   target.searchParams.set("quality", mapQuality(quality));
+  const headers = { "User-Agent": USER_AGENT, "Content-Type": "application/json" };
+  if (key) headers["X-API-Key"] = key;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const reply = await request(target.href, {
-      method: "GET",
-      headers: { "X-API-Key": key, "User-Agent": USER_AGENT, "Content-Type": "application/json" },
-      signal: controller.signal
-    });
+    const reply = await request(target.href, { method: "GET", headers, signal: controller.signal });
     if (!reply || reply.status !== 200) throw new Error("external source: http status");
     const payload = await reply.json();
     const url = assertSafeURL(resolveUrl(payload));
@@ -2858,27 +2904,30 @@ async function search({ query, kind = "tracks", offset = 0 }) {
   return reply.result;
 }
 function externalSourceSettings() {
-  const read = (key2) => {
+  const read = (key) => {
     try {
-      return String(host.setting(key2) ?? "");
+      return String(host.setting(key) ?? "");
     } catch {
       return "";
     }
   };
   if (read("externalSourceEnabled") !== "true") return null;
-  const endpoint = read("externalSourceEndpoint");
-  const key = read("externalSourceKey");
-  if (!key || !/^https:\/\/\S+$/.test(endpoint)) return null;
-  return { endpoint, key };
+  const script = read("externalSourceScript");
+  if (!/^https:\/\/\S+$/.test(script)) return null;
+  return { script };
 }
 async function externalStream({ id, quality }) {
   const settings = externalSourceSettings();
   if (!settings || !/^\d{1,32}$/.test(typeof id === "string" ? id : "")) return null;
   try {
-    return await resolveExternal({ ...settings, id, quality });
+    const source = await loadScript({ url: settings.script, storage: host.storage, md5: (text) => host.crypto.md5(text) });
+    if (!source.ok) throw Object.assign(new Error("external source: script"), { reason: source.reason });
+    if (!source.qs) throw Object.assign(new Error("external source: unsupported"), { reason: "unsupported" });
+    return await resolveExternal({ apiUrl: source.apiUrl, key: source.key, id, quality });
   } catch (error2) {
+    const reason = error2?.reason || (error2?.name === "AbortError" ? "timeout" : "failure");
     try {
-      console.warn(`external source fallback: ${error2?.name === "AbortError" ? "timeout" : "failure"}`);
+      console.warn(`external source fallback: ${reason}`);
     } catch {
     }
     return null;

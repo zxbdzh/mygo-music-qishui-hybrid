@@ -1,7 +1,7 @@
 {
   "id": "qishui-app-login",
   "name": "汽水音乐",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minAppVersion": "0.1.20",
   "main": "index.js",
   "playback": "stream",
@@ -10,18 +10,12 @@
       "key": "externalSourceEnabled",
       "label": "使用外部音源",
       "type": "boolean",
-      "help": "开启后先向解析服务获取直链，拿不到合规直链时自动回落官方播放；关闭时不发出任何解析请求。"
+      "help": "开启后先向音源取直链，拿不到合规直链时自动回落官方播放；关闭时不发出任何音源请求。"
     },
     {
-      "key": "externalSourceEndpoint",
-      "label": "解析服务地址",
-      "help": "填完整地址，必须以 https:// 开头，例如 https://source.shiqianjiang.cn/api/music/url。留空则只用官方播放。"
-    },
-    {
-      "key": "externalSourceKey",
-      "label": "解析服务密钥",
-      "type": "password",
-      "help": "作为 X-API-Key 发送给解析服务，只保存在本机插件设置里。"
+      "key": "externalSourceScript",
+      "label": "LX 音源脚本地址",
+      "help": "填完整的 LX 脚本地址，必须以 https:// 开头，例如 https://source.shiqianjiang.cn/api/script/lx?key=…。只读取脚本声明的接口，不执行脚本；更换地址后下一次播放重新读取。"
     }
   ],
   "navigation": [
@@ -48,10 +42,7 @@
   ],
   "permissions": {
     "network": [
-      "qishui.com",
-      "*.qishui.com",
-      "beta-luna.douyin.com",
-      "source.shiqianjiang.cn"
+      "*"
     ],
     "process": [
       "bin/qishui-helper-*"
