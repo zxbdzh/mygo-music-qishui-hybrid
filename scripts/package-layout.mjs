@@ -11,7 +11,7 @@ export const runtimeSource = [
   'helper/discovery.mjs', 'helper/history.mjs', 'helper/scene-pages.mjs', 'helper/home-page.mjs', 'helper/exploration.mjs', 'helper/external-source.mjs',
   'helper/m4a.mjs',
   'scripts/build.mjs', 'scripts/package.mjs', 'scripts/package-layout.mjs', 'scripts/build-native.mjs',
-  'scripts/runtime-assets.mjs', 'scripts/prepare-windows.mjs',
+  'scripts/runtime-assets.mjs', 'scripts/prepare-windows.mjs', 'scripts/prepare-darwin.mjs',
   'native/worker', 'native/signer', 'native/login',
   'native/windows-runner/main_windows.go', 'native/windows-runner/go.mod', 'native/windows-runner/go.sum', 'native/windows-runner/README',
 ]

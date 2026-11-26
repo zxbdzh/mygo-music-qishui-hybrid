@@ -17,6 +17,23 @@ export const DARWIN_AMD64_DOWNLOAD = {
   url: 'https://lf-luna-release.qishui.com/obj/luna-release/3.7.0/452316191/SodaMusic-v3.7.0-official-darwin_x64.tgz',
   sha256: '6da004452e20ba719fac5f393d70f09073d3fa908f536ca0c9877d823bac328b',
 }
+// Same 3.7.0 update archive as Windows; the two SDK files sit in app.asar.unpacked.
+export const DARWIN_DOWNLOADS = [
+  {
+    arch: 'arm64',
+    url: 'https://lf-luna-release.qishui.com/obj/luna-release/3.7.0/452316191/SodaMusic-v3.7.0-official-darwin_arm64.tgz',
+    sha256: '40c6bc80aa32cd1d5c76ad1b05bccc67e5ec22cf779b6dc3617ee5432b88ee04',
+    type: 'tgz',
+    files: { 'app.asar.unpacked/bdms.node': 'bdms.node', 'app.asar.unpacked/libMetaSecML.dylib': 'libMetaSecML.dylib' },
+  },
+  {
+    arch: 'amd64',
+    url: 'https://lf-luna-release.qishui.com/obj/luna-release/3.7.0/452316191/SodaMusic-v3.7.0-official-darwin_x64.tgz',
+    sha256: '6da004452e20ba719fac5f393d70f09073d3fa908f536ca0c9877d823bac328b',
+    type: 'tgz',
+    files: { 'app.asar.unpacked/bdms.node': 'bdms.node', 'app.asar.unpacked/libMetaSecML.dylib': 'libMetaSecML.dylib' },
+  },
+]
 
 export function darwinAssets(arch) {
   if (arch === 'arm64') return { files: DARWIN_FILES }

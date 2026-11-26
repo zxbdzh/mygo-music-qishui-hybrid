@@ -1,0 +1,54 @@
+name: build-macos
+# Builds the two macOS runtime packages on an Apple Silicon runner, because
+# package.mjs refuses to build darwin targets anywhere else. Windows packages
+# are built locally; this workflow only fills the gap CI can cover.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build (must match plugin.json)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  darwin:
+    runs-on: macos-14
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: arm64
+            target: darwin-arm64
+          - arch: amd64
+            target: darwin-amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          # go.mod asks for 1.27; the runner's bundled Go may be older.
+          go-version: '1.27'
+          cache: false
+      - name: Verify manifest version
+        run: |
+          node -e "const v=require('./plugin.json').version; if (v!=='${{ inputs.version }}') { console.error('plugin.json is '+v); process.exit(1) }"
+      - name: Install dependencies
+        run: npm ci
+      - name: Fetch pinned official SDK
+        run: node scripts/prepare-darwin.mjs "$RUNNER_TEMP/native-${{ matrix.arch }}" ${{ matrix.arch }}
+      - name: Build package
+        env:
+          QISHUI_NATIVE_DIR: ${{ matrix.arch == 'arm64' && format('{0}/native-arm64', runner.temp) || '' }}
+          QISHUI_DARWIN_AMD64_NATIVE_DIR: ${{ matrix.arch == 'amd64' && format('{0}/native-amd64', runner.temp) || '' }}
+        run: npm run package -- --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.target }}-${{ inputs.version }}
+          path: |
+            dist/plugin-${{ matrix.target }}-${{ inputs.version }}-*.zip
+            !dist/*validation*
+          if-no-files-found: error
